@@ -142,6 +142,8 @@ ul, ol { list-style: none; }
 .intro em { color: var(--ink); }
 
 .contact {
+  --contact-icon-size: 1.1em;
+  --contact-icon-gap: 0.7em;
   grid-column: 9 / 13;
   display: flex;
   flex-direction: column;
@@ -151,37 +153,22 @@ ul, ol { list-style: none; }
   color: var(--ink-2);
   margin-top: -0.35em;
 }
-.contact li { display: flex; align-items: center; gap: 0.7em; min-width: 0; }
+.contact li { display: flex; align-items: center; gap: var(--contact-icon-gap); min-width: 0; }
 .contact a { color: var(--ink); }
 #doing:not(:empty)::before { content: " \00b7  "; }
 
 .ic {
   flex: none;
-  width: 1.2em;
-  height: 1.2em;
+  width: var(--contact-icon-size);
+  height: var(--contact-icon-size);
+  color: var(--ink-2);
   fill: none;
   stroke: var(--ink-3);
   stroke-width: 1.5;
   stroke-linecap: round;
   stroke-linejoin: round;
 }
-.ic.solid { fill: currentColor; stroke: none; width: 1.1em; height: 1.1em; }
-.contact > li > svg.ic { stroke: var(--ink-2); }
-
-/* A presence light: lit and breathing while it's daytime in Surat */
-.presence { display: grid; place-items: center; }
-.presence::before {
-  content: "";
-  width: 0.5em;
-  height: 0.5em;
-  border-radius: 50%;
-  background: var(--ink-3);
-}
-.presence.awake::before { background: var(--accent); animation: breathe 2.8s ease-out infinite; }
-@keyframes breathe {
-  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
-  70%, 100% { box-shadow: 0 0 0 0.45em transparent; }
-}
+.ic.solid { fill: currentColor; stroke: none; }
 
 .copy {
   display: grid;
@@ -191,6 +178,7 @@ ul, ol { list-style: none; }
   border-radius: 3px;
   background: none;
   color: var(--ink-3);
+  font: inherit;
   cursor: pointer;
   transition: color 0.15s;
 }
@@ -210,10 +198,9 @@ ul, ol { list-style: none; }
 .copy.done .i-copy { opacity: 0; transform: scale(0.6); }
 .copy.done .i-done { opacity: 1; transform: none; }
 
-.social { gap: 1.4em; }
-.contact .social { margin-top: 2px; gap: 1.1em; }
-.social a { display: inline-flex; align-items: center; gap: 0.55em; }
-.social a .ic { color: var(--ink-2); transition: color 0.15s; }
+.contact .social { gap: 1.1em; }
+.social a { display: inline-flex; align-items: center; gap: var(--contact-icon-gap); }
+.social a .ic { transition: color 0.15s; }
 .social a:hover .ic { color: var(--ink); }
 
 /* Summary and timeline */

@@ -16,9 +16,7 @@
     const p = Object.fromEntries(clockFormat.formatToParts(new Date()).map((x) => [x.type, x.value]));
     clock.textContent = `${p.hour}:${p.minute}`;
     doing.textContent = guess(+p.hour, p.weekday === "Sat" || p.weekday === "Sun");
-    presence.classList.toggle("awake", +p.hour >= 7);
   };
-  const presence = document.getElementById("presence");
   let clockTimer = 0;
   const refreshClock = () => {
     clearTimeout(clockTimer);
