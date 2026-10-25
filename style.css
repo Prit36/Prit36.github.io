@@ -260,7 +260,7 @@ ul, ol { list-style: none; }
 
 .total {
   display: flex;
-  font-size: calc(var(--display) * 0.88);
+  font-size: calc(var(--display) * 0.7);
   line-height: 0.75;
   letter-spacing: -0.03em;
   font-variant-numeric: lining-nums tabular-nums;
