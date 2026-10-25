@@ -18,6 +18,44 @@
   setClock();
   setInterval(setClock, 10000);
 
+  // The name thickens under the mouse, letter by letter, like ink pooling.
+  const nameEl = document.querySelector(".name");
+  const letters = [];
+  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+    nameEl.setAttribute("aria-label", "Prit Prajapati");
+    for (const node of [...nameEl.childNodes]) {
+      if (node.nodeType !== Node.TEXT_NODE) continue;
+      const frag = document.createDocumentFragment();
+      for (const ch of node.textContent.trim()) {
+        const s = document.createElement("span");
+        s.textContent = ch;
+        s.setAttribute("aria-hidden", "true");
+        frag.append(s);
+        letters.push(s);
+      }
+      node.replaceWith(frag);
+    }
+  }
+  let px = 0, py = 0, pending = false;
+  const weigh = () => {
+    pending = false;
+    const boxes = letters.map((s) => s.getBoundingClientRect());
+    letters.forEach((s, i) => {
+      const b = boxes[i];
+      const d = Math.hypot(px - (b.left + b.width / 2), py - (b.top + b.height / 2));
+      s.style.fontWeight = Math.round(400 + 300 * Math.exp(-((d / b.height) ** 2)));
+    });
+  };
+  document.addEventListener("pointermove", (e) => {
+    if (e.pointerType !== "mouse" || !letters.length) return;
+    px = e.clientX;
+    py = e.clientY;
+    if (!pending) { pending = true; requestAnimationFrame(weigh); }
+  });
+  document.documentElement.addEventListener("pointerleave", () => {
+    letters.forEach((s) => { s.style.fontWeight = ""; });
+  });
+
   const data = window.ACTIVITY;
   if (!data) return;
 
@@ -132,6 +170,56 @@
   fitBars();
   new ResizeObserver(fitBars).observe(wave);
 
+  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+
+  // The big year rolls, like an odometer, into whatever is in focus: a day,
+  // or the months a project was built in. Later rolls up, earlier rolls down.
+
+  const totalEl = document.querySelector(".total");
+  const year = totalEl.textContent.trim();
+  totalEl.textContent = "";
+  const slots = [];
+  let rolled = "";
+  let rolledPos = -1;
+
+  const roll = (text, pos, fast = false) => {
+    if (text === rolled) return;
+    const dir = pos >= rolledPos ? 1 : -1;
+    rolled = text;
+    rolledPos = pos;
+    while (slots.length < text.length) {
+      const s = document.createElement("span");
+      s.className = "slot";
+      totalEl.append(s);
+      slots.push(s);
+    }
+    while (slots.length > text.length) slots.pop().remove();
+    [...text].forEach((ch, i) => {
+      const slot = slots[i];
+      if (slot.dataset.ch === ch) return;
+      slot.dataset.ch = ch;
+      [...slot.children].slice(0, -1).forEach((c) => c.remove());
+      const old = slot.lastElementChild;
+      const next = document.createElement("span");
+      next.textContent = ch;
+      slot.append(next);
+      if (!old) return;
+      if (reduced) { old.remove(); return; }
+      old.className = "out";
+      const timing = { duration: fast ? 90 : 240, easing: "cubic-bezier(0.2, 0.7, 0.2, 1)" };
+      next.animate([{ transform: `translateY(${dir * 1.1}em)` }, { transform: "none" }], timing);
+      old.animate([{ transform: "none" }, { transform: `translateY(${-dir * 1.1}em)` }], timing)
+        .onfinish = () => old.remove();
+    });
+  };
+
+  const dateLabel = (i) => `${MONTHS[dateOf(i).getUTCMonth()]} ${dateOf(i).getUTCDate()}`;
+  const monthsOf = (r) => {
+    const a = MONTHS[dateOf(r.active[0]).getUTCMonth()];
+    const b = MONTHS[dateOf(r.active.at(-1)).getUTCMonth()];
+    return a === b ? a : `${a}–${b}`;
+  };
+
   // The line beside the year describes whatever is in focus.
 
   const overview = noteEl.textContent.trim();
@@ -158,6 +246,7 @@
     clear();
     current = -1;
     show(overview);
+    roll(year, -1);
   };
 
   const focusRow = (r) => {
@@ -172,6 +261,7 @@
     });
     const built = r.active.length ? ` Built ${span(r.active[0], r.active.at(-1))}.` : "";
     show(`${r.el.dataset.detail}${built}`);
+    if (r.active.length) roll(monthsOf(r), r.active[0]);
   };
 
   // During playback a quiet day keeps the last line, so the text doesn't flicker.
@@ -191,7 +281,9 @@
       r.ticks[i].classList.add("hit");
       lit.push(r.ticks[i]);
     });
-    const d = `${weekday.format(dateOf(i))}, ${dayMonth.format(dateOf(i))}`;
+    // The date itself is in the big rolling numbers, so the line only needs the weekday.
+    roll(dateLabel(i), i, playback);
+    const d = weekday.format(dateOf(i));
     if (on.length) show(`${d}: worked on ${and.format(on.map((r) => r.name))}.`);
     else if (!playback) show(`${d}: nothing public.`);
   };
@@ -236,8 +328,62 @@
     tone.connect(echo).connect(feedback).connect(echo);
     echo.connect(wet).connect(master);
     master.connect(audio.destination);
-    return { input: tone, master };
+    const analyser = audio.createAnalyser();
+    analyser.fftSize = 1024;
+    master.connect(analyser);
+    return { input: tone, master, analyser };
   };
+
+  // While the year plays, the rule under the summary becomes the sound itself:
+  // a string, fixed at both ends, moving with what you hear.
+
+  const summary = document.querySelector(".summary");
+  const scope = document.createElement("canvas");
+  scope.className = "scope";
+  scope.setAttribute("aria-hidden", "true");
+  summary.append(scope);
+  let scopeUntil = 0;
+  let scopeFrame = 0;
+
+  const pluckString = (analyser) => {
+    cancelAnimationFrame(scopeFrame);
+    const g = scope.getContext("2d");
+    const buf = new Float32Array(analyser.fftSize);
+    const color = getComputedStyle(scope).color;
+    summary.classList.add("is-live");
+    const frame = () => {
+      const dpr = window.devicePixelRatio || 1;
+      const w = scope.clientWidth, h = scope.clientHeight, mid = h / 2;
+      if (scope.width !== Math.round(w * dpr)) {
+        scope.width = Math.round(w * dpr);
+        scope.height = Math.round(h * dpr);
+      }
+      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      g.clearRect(0, 0, w, h);
+      if (performance.now() > scopeUntil) {
+        summary.classList.remove("is-live");
+        return;
+      }
+      analyser.getFloatTimeDomainData(buf);
+      // Start at a rising zero crossing so the wave holds still instead of sliding.
+      let s = 0;
+      for (let i = 1; i < buf.length / 2; i++) {
+        if (buf[i - 1] < 0 && buf[i] >= 0) { s = i; break; }
+      }
+      g.beginPath();
+      for (let x = 0; x <= w; x += 2) {
+        const v = buf[s + Math.floor((x / w) * 480)];
+        g.lineTo(x, mid - Math.tanh(v * 8) * (mid - 2) * Math.sin((Math.PI * x) / w));
+      }
+      g.strokeStyle = color;
+      g.lineWidth = 1;
+      g.stroke();
+      scopeFrame = requestAnimationFrame(frame);
+    };
+    frame();
+  };
+
+  const title = document.title;
 
   const stop = (finished = false) => {
     if (!playing) return;
@@ -246,8 +392,10 @@
       const { master } = playing.sound;
       master.gain.setTargetAtTime(0, audio.currentTime, finished ? 0.4 : 0.03);
       setTimeout(() => master.disconnect(), finished ? 3000 : 400);
+      scopeUntil = performance.now() + (finished ? 2500 : 250);
     }
     playing = null;
+    document.title = title;
     playBtn.textContent = "Play the year";
     playBtn.setAttribute("aria-pressed", "false");
     reset();
@@ -267,6 +415,8 @@
       rows.forEach((r, k) => r.active.forEach((i) => {
         if (i <= today) pluck(sound.input, pitch(k), a0 + i * STEP, r.counts[i] / maxCell);
       }));
+      scopeUntil = Infinity;
+      pluckString(sound.analyser);
     }
     playing = { sound, frame: 0 };
     playBtn.textContent = "Stop";
@@ -281,6 +431,7 @@
       if (i >= 0 && i !== shown && i <= today) {
         shown = i;
         scrubTo(i, true);
+        document.title = `▶ ${dateLabel(i)} · ${title}`;
       }
       score.style.setProperty("--ph", Math.max(0, Math.min(pos, today)) / n);
       playing.frame = requestAnimationFrame(frame);

@@ -100,6 +100,7 @@ ul, ol { list-style: none; }
   line-height: 0.92;
   letter-spacing: -0.025em;
 }
+.name span { transition: font-weight 0.35s ease-out; }
 
 .intro {
   grid-column: 4 / 9;
@@ -134,11 +135,37 @@ ul, ol { list-style: none; }
 
 .total {
   grid-column: 1 / 4;
+  display: flex;
   font-size: var(--display);
   line-height: 0.75;
   letter-spacing: -0.03em;
   font-variant-numeric: lining-nums tabular-nums;
+  white-space: pre;
 }
+
+/* One clipped window per character, so each can roll on its own.
+   The padding gives ascenders and descenders room; the margin takes it back. */
+.slot {
+  position: relative;
+  overflow: hidden;
+  padding: 0.2em 0;
+  margin: -0.2em 0;
+}
+.slot > span { display: block; }
+.slot > .out { position: absolute; left: 0; top: 0.2em; }
+
+/* Stands in for the summary's bottom rule while the year plays */
+.summary { position: relative; }
+.scope {
+  position: absolute;
+  left: 0;
+  bottom: -14.5px;
+  width: 100%;
+  height: 28px;
+  color: var(--accent);
+  pointer-events: none;
+}
+.summary.is-live { border-bottom-color: transparent; }
 
 .note {
   grid-column: 4 / 9;
@@ -185,7 +212,9 @@ ul, ol { list-style: none; }
 }
 .m { background: var(--rule); }
 .now-line, .ph { left: calc(var(--x) * 100% + 100% / var(--n) / 2); }
-.now-line { background: var(--accent); opacity: 0.45; }
+/* Today blinks like a text cursor: the year is still being written */
+.now-line { background: var(--accent); opacity: 0.45; animation: caret 1.8s ease-in-out infinite; }
+@keyframes caret { 50% { opacity: 0.08; } }
 .ph { background: var(--accent); opacity: 0; z-index: 3; left: calc(var(--ph) * 100% + 100% / var(--n) / 2); }
 .is-scrub .ph { opacity: 1; }
 
