@@ -353,8 +353,18 @@ ul, ol { list-style: none; }
 /* Today blinks like a text cursor: the year is still being written */
 .now-line { background: var(--accent); opacity: 0.45; animation: caret 1.8s ease-in-out infinite; }
 @keyframes caret { 50% { opacity: 0.08; } }
-.ph { background: var(--accent); opacity: 0; z-index: 3; left: calc(var(--ph) * 100% + 100% / var(--n) / 2); }
+.ph { background: var(--accent); opacity: 0; z-index: 3; left: calc(100% / var(--n) / 2); }
 .is-scrub .ph { opacity: 1; }
+
+/* Only the visible staff needs a blinking cursor. */
+.career .now-line,
+.is-career .works .now-line,
+.is-career .zoom .now-line { animation: none; }
+.is-career .career .now-line { animation: caret 1.8s ease-in-out infinite; }
+.is-paused *, .is-paused *::before, .is-paused *::after {
+  animation-play-state: paused !important;
+  transition: none !important;
+}
 
 .d, .t {
   position: absolute;
@@ -724,5 +734,5 @@ ul, ol { list-style: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; animation: none !important; }
+  *, *::before, *::after { transition: none !important; animation: none !important; }
 }

@@ -1,4 +1,6 @@
 (() => {
+  const motion = matchMedia("(prefers-reduced-motion: reduce)");
+  let reduced = motion.matches;
   const clock = document.getElementById("clock");
   const doing = document.getElementById("doing");
   const clockFormat = new Intl.DateTimeFormat("en-GB", {
@@ -17,8 +19,17 @@
     presence.classList.toggle("awake", +p.hour >= 7);
   };
   const presence = document.getElementById("presence");
-  setClock();
-  setInterval(setClock, 10000);
+  let clockTimer = 0;
+  const refreshClock = () => {
+    clearTimeout(clockTimer);
+    if (document.hidden) return;
+    setClock();
+    clockTimer = setTimeout(refreshClock, 60000 - Date.now() % 60000);
+  };
+  refreshClock();
+  document.addEventListener("visibilitychange", refreshClock);
+  window.addEventListener("pagehide", () => clearTimeout(clockTimer));
+  window.addEventListener("pageshow", refreshClock);
 
   const copyBtn = document.getElementById("copy");
   let copied = 0;
@@ -40,7 +51,8 @@
   // The name thickens under the mouse, letter by letter, like ink pooling.
   const nameEl = document.querySelector(".name");
   const letters = [];
-  if (!matchMedia("(prefers-reduced-motion: reduce)").matches) {
+  const splitName = () => {
+    if (letters.length) return;
     nameEl.setAttribute("aria-label", "Prit Prajapati");
     for (const node of [...nameEl.childNodes]) {
       if (node.nodeType !== Node.TEXT_NODE) continue;
@@ -54,26 +66,52 @@
       }
       node.replaceWith(frag);
     }
-  }
-  let px = 0, py = 0, pending = false;
+  };
+  if (!reduced) splitName();
+  let px = 0, py = 0, nameFrame = 0, measureFrame = 0, nameActive = false;
+  let nameBox, letterBoxes = [];
+  const measureName = () => {
+    measureFrame = 0;
+    nameBox = nameEl.getBoundingClientRect();
+    letterBoxes = letters.map((s) => s.getBoundingClientRect());
+  };
+  const resetName = () => {
+    cancelAnimationFrame(nameFrame);
+    nameFrame = 0;
+    if (!nameActive) return;
+    nameActive = false;
+    letters.forEach((s) => { s.style.fontWeight = ""; });
+  };
+  const scheduleNameMeasure = () => {
+    if (!letters.length || reduced || document.hidden || measureFrame) return;
+    resetName();
+    measureFrame = requestAnimationFrame(measureName);
+  };
   const weigh = () => {
-    pending = false;
-    const boxes = letters.map((s) => s.getBoundingClientRect());
+    nameFrame = 0;
+    nameActive = true;
     letters.forEach((s, i) => {
-      const b = boxes[i];
+      const b = letterBoxes[i];
+      if (!b.height) return;
       const d = Math.hypot(px - (b.left + b.width / 2), py - (b.top + b.height / 2));
-      s.style.fontWeight = Math.round(400 + 300 * Math.exp(-((d / b.height) ** 2)));
+      const weight = String(Math.round(400 + 300 * Math.exp(-((d / b.height) ** 2))));
+      if (s.style.fontWeight !== weight) s.style.fontWeight = weight;
     });
   };
   document.addEventListener("pointermove", (e) => {
-    if (e.pointerType !== "mouse" || !letters.length) return;
+    if (e.pointerType !== "mouse" || !letters.length || reduced || document.hidden || !nameBox) return;
     px = e.clientX;
     py = e.clientY;
-    if (!pending) { pending = true; requestAnimationFrame(weigh); }
+    const margin = nameBox.height;
+    if (px < nameBox.left - margin || px > nameBox.right + margin
+      || py < nameBox.top - margin || py > nameBox.bottom + margin) return resetName();
+    if (!nameFrame) nameFrame = requestAnimationFrame(weigh);
   });
-  document.documentElement.addEventListener("pointerleave", () => {
-    letters.forEach((s) => { s.style.fontWeight = ""; });
-  });
+  document.documentElement.addEventListener("pointerleave", resetName);
+  window.addEventListener("resize", scheduleNameMeasure);
+  window.addEventListener("scroll", scheduleNameMeasure, { passive: true });
+  document.fonts.ready.then(scheduleNameMeasure);
+  scheduleNameMeasure();
 
   const data = window.ACTIVITY;
   if (!data) return;
@@ -84,7 +122,7 @@
   const n = Math.round((parse(data.to) - start) / DAY) + 1;
   const indexOf = (s) => Math.round((parse(s) - start) / DAY);
   const dateOf = (i) => new Date(start + i * DAY);
-  const today = indexOf(data.updated);
+  const today = Math.max(0, Math.min(n - 1, indexOf(data.updated)));
   const sum = (a) => a.reduce((x, y) => x + y, 0);
 
   const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
@@ -108,19 +146,25 @@
     }
     const active = counts.flatMap((c, i) => (c ? [i] : []));
     return {
-      el, counts, active, ticks: [],
+      el, counts, active, ticks: [], highlights: [], total: sum(counts),
       name: el.querySelector(".title a").textContent,
       track: el.querySelector(".track"),
     };
   });
 
-  const totals = Array.from({ length: n }, (_, i) => sum(rows.map((r) => r.counts[i])));
-  const maxDay = Math.max(...totals);
-  const maxCell = Math.max(...rows.flatMap((r) => r.counts));
+  const totals = new Array(n).fill(0);
+  const rowsByDay = Array.from({ length: n }, () => []);
+  let maxCell = 1;
+  rows.forEach((r) => r.active.forEach((i) => {
+    totals[i] += r.counts[i];
+    rowsByDay[i].push(r);
+    maxCell = Math.max(maxCell, r.counts[i]);
+  }));
+  rows.forEach((r, i) => { r.pitchIndex = i; });
+  const maxDay = Math.max(1, ...totals);
   const months = totals.flatMap((_, i) => (dateOf(i).getUTCDate() === 1 ? [i] : []));
 
   score.style.setProperty("--n", n);
-  score.style.setProperty("--ph", 0);
 
   const markAt = (className, x, vars = {}) => {
     const e = document.createElement("span");
@@ -139,15 +183,24 @@
 
   // Month lines, today and the playhead go into the timeline and every track,
   // so they read as one line running down the page.
+  const playheads = [];
+  let playheadWidth = 0, playheadPosition = 0;
+  const setPlayhead = (position) => {
+    playheadPosition = position;
+    const transform = `translateX(${position * playheadWidth}px)`;
+    playheads.forEach((e) => { if (e.style.transform !== transform) e.style.transform = transform; });
+  };
   const staff = (parent) => {
     months.forEach((i) => parent.append(mark("m", i)));
     parent.append(mark("now-line", today));
-    parent.append(mark("ph", 0));
+    const head = mark("ph", 0);
+    parent.append(head);
+    playheads.push(head);
   };
 
   // The marks sweep in from the left once, on load.
-  score.classList.add("drawing");
-  setTimeout(() => score.classList.remove("drawing"), 2000);
+  if (!reduced) score.classList.add("drawing");
+  const drawingTimer = setTimeout(() => score.classList.remove("drawing"), 2000);
 
   staff(zoom);
   const bars = [];
@@ -182,22 +235,23 @@
 
   // Bars get a whole-pixel width, and a month label that would touch "today" is hidden.
   const fitBars = () => {
-    const slot = wave.clientWidth / n;
+    playheadWidth = wave.clientWidth;
+    setPlayhead(playheadPosition);
+    const slot = playheadWidth / n;
     score.style.setProperty("--bw", `${Math.max(1, Math.round(slot * 0.66))}px`);
     nowLabel.style.translate = "";
-    const overhang = nowLabel.getBoundingClientRect().right - axis.getBoundingClientRect().right;
-    if (overhang > 0) nowLabel.style.translate = `${-overhang}px`;
     const now = nowLabel.getBoundingClientRect();
-    monthLabels.forEach((s) => {
-      s.style.visibility = "";
-      const box = s.getBoundingClientRect();
-      if (box.right + 8 > now.left && box.left < now.right + 8) s.style.visibility = "hidden";
+    const overhang = Math.max(0, now.right - axis.getBoundingClientRect().right);
+    const boxes = monthLabels.map((s) => s.getBoundingClientRect());
+    if (overhang) nowLabel.style.translate = `${-overhang}px`;
+    monthLabels.forEach((s, i) => {
+      const box = boxes[i];
+      s.style.visibility = box.right + 8 > now.left - overhang && box.left < now.right - overhang + 8 ? "hidden" : "";
     });
   };
-  fitBars();
-  new ResizeObserver(fitBars).observe(wave);
-
-  const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
+  const waveObserver = new ResizeObserver(fitBars);
+  waveObserver.observe(wave);
+  document.fonts.ready.then(fitBars);
 
   // Pointing at a project makes its name do a tiny version of what the
   // project does. Nothing moves before that, and leaving undoes all of it.
@@ -223,8 +277,6 @@
       later: (ms, f) => { const t = setTimeout(f, ms); undo(() => clearTimeout(t)); },
       put: (parent, e) => { parent.append(e); undo(() => e.remove()); return e; },
       cls: (e, c) => {
-        e.classList.remove(c);
-        void e.offsetWidth; // so the animation starts over
         e.classList.add(c);
         undo(() => e.classList.remove(c));
       },
@@ -258,6 +310,7 @@
 
   // Splits a rectangle by value, alternating sides, the way a disk treemap does.
   const treemap = (items, x, y, w, h, out = []) => {
+    if (!items.length) return out;
     if (items.length === 1) { out.push({ ...items[0], x, y, w, h }); return out; }
     const total = sum(items.map((t) => t.v));
     let k = 1, acc = items[0].v;
@@ -293,10 +346,12 @@
       const ink = getComputedStyle(k.a).color;
       const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim();
       const order = ls.map((_, i) => i).sort((p, q) => time(p) - time(q));
-      const gap = (k.a.offsetWidth - sum(ls.map((s) => s.offsetWidth))) / (ls.length - 1);
+      const widths = ls.map((s) => s.offsetWidth);
+      const lefts = ls.map((s) => s.offsetLeft);
+      const gap = (k.a.offsetWidth - sum(widths)) / Math.max(1, ls.length - 1);
       const to = [];
       let x = 0;
-      order.forEach((i) => { to[i] = x; x += ls[i].offsetWidth + gap; });
+      order.forEach((i) => { to[i] = x; x += widths[i] + gap; });
       const move = "cubic-bezier(0.6, 0, 0.2, 1)";
       ls.forEach((s, i) => {
         const y = -Math.log(time(i) / 8) / Math.log(80) * em * 0.8; // log scale, 8 ms to 640 ms
@@ -306,8 +361,8 @@
           { offset: 0, transform: "none", easing: "cubic-bezier(0.2, 0.7, 0.2, 1)" },
           { offset: 0.15, transform: at(0) },
           { offset: 0.22, transform: at(0), easing: move },
-          { offset: 0.5, transform: at(to[i] - s.offsetLeft) },
-          { offset: 0.74, transform: at(to[i] - s.offsetLeft), easing: move },
+          { offset: 0.5, transform: at(to[i] - lefts[i]) },
+          { offset: 0.74, transform: at(to[i] - lefts[i]), easing: move },
           { offset: 0.95, transform: "none" },
           { offset: 1, transform: "none" },
         ], timing);
@@ -338,7 +393,8 @@
       let frame = 0;
       const tick = () => {
         const p = Math.min(1, (performance.now() - t0) / 2000);
-        k.stack.textContent = p < 1 ? `${(65 * p).toFixed(1)}M lines` : "65M lines in 2 s";
+        const text = p < 1 ? `${(65 * p).toFixed(1)}M lines` : "65M lines in 2 s";
+        if (k.stack.textContent !== text) k.stack.textContent = text;
         if (p < 1) frame = requestAnimationFrame(tick);
       };
       tick();
@@ -455,7 +511,7 @@
       const map = k.put(k.a.parentElement, make("span", "fx-map"));
       map.style.left = `${k.stack.offsetLeft}px`;
       k.cls(k.stack, "fx-gone");
-      const items = rows.map((row) => ({ row, v: sum(row.counts) })).filter((t) => t.v).sort((p, q) => q.v - p.v);
+      const items = rows.map((row) => ({ row, v: row.total })).filter((t) => t.v).sort((p, q) => q.v - p.v);
       treemap(items, 0, 0, map.clientWidth, map.clientHeight).forEach((t, i) => {
         const s = make("span", t.row === r ? "is-me" : "");
         Object.assign(s.style, { left: `${t.x}px`, top: `${t.y}px`, width: `${t.w}px`, height: `${t.h}px` });
@@ -481,6 +537,17 @@
   const year = totalEl.textContent.trim();
   totalEl.textContent = "";
   const slots = [];
+  const slotAnimations = new Map();
+  const cancelRoll = (slot) => {
+    const animations = slotAnimations.get(slot);
+    if (!animations) return;
+    animations.forEach((a) => { a.onfinish = null; a.cancel(); });
+    slotAnimations.delete(slot);
+  };
+  const settleRoll = () => slots.forEach((slot) => {
+    cancelRoll(slot);
+    while (slot.children.length > 1) slot.firstElementChild.remove();
+  });
   let rolled = "";
   let rolledPos = -1;
 
@@ -495,10 +562,15 @@
       totalEl.append(s);
       slots.push(s);
     }
-    while (slots.length > text.length) slots.pop().remove();
+    while (slots.length > text.length) {
+      const slot = slots.pop();
+      cancelRoll(slot);
+      slot.remove();
+    }
     [...text].forEach((ch, i) => {
       const slot = slots[i];
       if (slot.dataset.ch === ch) return;
+      cancelRoll(slot);
       slot.dataset.ch = ch;
       [...slot.children].slice(0, -1).forEach((c) => c.remove());
       const old = slot.lastElementChild;
@@ -509,9 +581,10 @@
       if (reduced) { old.remove(); return; }
       old.className = "out";
       const timing = { duration: fast ? 90 : 240, easing: "cubic-bezier(0.2, 0.7, 0.2, 1)" };
-      next.animate([{ transform: `translateY(${dir * 1.1}em)` }, { transform: "none" }], timing);
-      old.animate([{ transform: "none" }, { transform: `translateY(${-dir * 1.1}em)` }], timing)
-        .onfinish = () => old.remove();
+      const incoming = next.animate([{ transform: `translateY(${dir * 1.1}em)` }, { transform: "none" }], timing);
+      const outgoing = old.animate([{ transform: "none" }, { transform: `translateY(${-dir * 1.1}em)` }], timing);
+      slotAnimations.set(slot, [incoming, outgoing]);
+      outgoing.onfinish = () => { old.remove(); cancelRoll(slot); };
     });
   };
 
@@ -525,7 +598,7 @@
   // The line beside the year describes whatever is in focus.
 
   const overview = noteEl.textContent.trim();
-  const show = (note) => { noteEl.textContent = note; };
+  const show = (note) => { if (noteEl.textContent !== note) noteEl.textContent = note; };
 
   const span = (a, b) => {
     const da = dateOf(a), db = dateOf(b);
@@ -535,14 +608,21 @@
   };
 
   let lit = [];
+  let focusedRows = [];
+  let highlightedRow = null;
   let current = -1;
 
   const clear = () => {
     endFx();
-    lit.forEach((e) => (e.classList.contains("hl") ? e.remove() : e.classList.remove("hit")));
+    lit.forEach((e) => e.classList.remove("hit"));
     lit = [];
+    if (highlightedRow) {
+      highlightedRow.highlights.forEach((e) => { e.hidden = true; });
+      highlightedRow = null;
+    }
     score.classList.remove("is-row", "is-scrub");
-    rows.forEach((r) => r.el.classList.remove("is-on"));
+    focusedRows.forEach((r) => r.el.classList.remove("is-on"));
+    focusedRows = [];
   };
 
   const reset = () => {
@@ -554,14 +634,18 @@
 
   const focusRow = (r) => {
     clear();
+    current = -1;
     score.classList.add("is-row");
     r.el.classList.add("is-on");
-    r.active.forEach((i) => {
+    focusedRows = [r];
+    if (!r.highlights.length) r.active.forEach((i) => {
       if (i > today) return;
       const e = mark("d hl", i, { "--v": r.counts[i] / maxDay });
       zoom.append(e);
-      lit.push(e);
+      r.highlights.push(e);
     });
+    r.highlights.forEach((e) => { e.hidden = false; });
+    highlightedRow = r;
     const built = r.active.length ? ` Built ${span(r.active[0], r.active.at(-1))}.` : "";
     show(`${r.el.dataset.detail}${built}`);
     if (r.active.length) roll(monthsOf(r), r.active[0]);
@@ -571,15 +655,17 @@
   // During playback a quiet day keeps the last line, so the text doesn't flicker.
   const scrubTo = (i, playback = false) => {
     i = Math.max(0, Math.min(today, n - 1, i));
+    if (i === current) return;
     clear();
     current = i;
     score.classList.add("is-scrub");
-    score.style.setProperty("--ph", i / n);
+    if (!playback) setPlayhead(i / n);
     if (totals[i]) {
       bars[i].classList.add("hit");
       lit.push(bars[i]);
     }
-    const on = rows.filter((r) => r.counts[i]);
+    const on = rowsByDay[i];
+    focusedRows = on;
     on.forEach((r) => {
       r.el.classList.add("is-on");
       r.ticks[i].classList.add("hit");
@@ -602,16 +688,32 @@
   const AudioCtx = window.AudioContext || window.webkitAudioContext;
   let audio = null;
   let playing = null;
+  const sounds = new Set();
+  const activeNotes = new Set();
+  const suspendAudio = () => {
+    if (audio && !playing && !sounds.size && !activeNotes.size) audio.suspend().catch(() => {});
+  };
 
-  const pluck = (out, freq, at, v) => {
+  const pluck = (sound, freq, at, v) => {
     const osc = audio.createOscillator();
     const env = audio.createGain();
+    const note = { osc, env };
+    sound.notes.add(note);
+    activeNotes.add(note);
+    osc.onended = () => {
+      osc.disconnect();
+      env.disconnect();
+      sound.notes.delete(note);
+      activeNotes.delete(note);
+      osc.onended = null;
+      suspendAudio();
+    };
     osc.type = "triangle";
     osc.frequency.value = freq;
     env.gain.setValueAtTime(0, at);
     env.gain.linearRampToValueAtTime(0.04 + 0.1 * Math.sqrt(v), at + 0.006);
     env.gain.exponentialRampToValueAtTime(0.0001, at + 1.1);
-    osc.connect(env).connect(out);
+    osc.connect(env).connect(sound.input);
     osc.start(at);
     osc.stop(at + 1.15);
   };
@@ -635,7 +737,35 @@
     const analyser = audio.createAnalyser();
     analyser.fftSize = 1024;
     master.connect(analyser);
-    return { input: tone, master, analyser };
+    const sound = { input: tone, master, analyser, notes: new Set(), nextDay: 0, timer: 0 };
+    sound.dispose = () => {
+      if (!sounds.delete(sound)) return;
+      clearTimeout(sound.timer);
+      sound.notes.forEach(({ osc, env }) => {
+        osc.stop();
+        osc.disconnect();
+        env.disconnect();
+      });
+      sound.notes.clear();
+      // Disconnect every edge, including the echo's feedback cycle.
+      [tone, echo, feedback, wet, master, analyser].forEach((node) => node.disconnect());
+      // Let stopped sources dispatch `ended` before suspending the context.
+      suspendAudio();
+    };
+    sounds.add(sound);
+    return sound;
+  };
+
+  // Keep only a short look-ahead of notes alive, even for a multi-year range.
+  const scheduleNotes = (sound, elapsed) => {
+    if (audio.state !== "running") return;
+    const last = Math.min(today, Math.floor((elapsed + 0.2) / STEP));
+    for (; sound.nextDay <= last; sound.nextDay++) {
+      const i = sound.nextDay;
+      if (i * STEP < elapsed - STEP) continue;
+      const at = audio.currentTime + Math.max(0, i * STEP - elapsed);
+      rowsByDay[i].forEach((r) => pluck(sound, pitch(r.pitchIndex), at, r.counts[i] / maxCell));
+    }
   };
 
   // While the year plays, the rule under the summary becomes the sound itself:
@@ -648,24 +778,38 @@
   summary.append(scope);
   let scopeUntil = 0;
   let scopeFrame = 0;
+  let scopeWidth = 0, scopeHeight = 0, scopeDpr = 1;
+  const sizeScope = () => {
+    scopeWidth = scope.clientWidth;
+    scopeHeight = scope.clientHeight;
+    scopeDpr = Math.min(window.devicePixelRatio || 1, 2);
+    scope.width = Math.round(scopeWidth * scopeDpr);
+    scope.height = Math.round(scopeHeight * scopeDpr);
+  };
+  const scopeObserver = new ResizeObserver(() => { if (scopeFrame) sizeScope(); });
+  scopeObserver.observe(summary);
+  const stopScope = () => {
+    cancelAnimationFrame(scopeFrame);
+    scopeFrame = 0;
+    // Resetting dimensions releases the bitmap instead of retaining it at idle.
+    scope.width = scope.height = 0;
+    summary.classList.remove("is-live");
+  };
 
   const pluckString = (analyser) => {
-    cancelAnimationFrame(scopeFrame);
+    stopScope();
+    if (reduced || document.hidden) return;
+    sizeScope();
     const g = scope.getContext("2d");
     const buf = new Float32Array(analyser.fftSize);
     const color = getComputedStyle(scope).color;
     summary.classList.add("is-live");
     const frame = () => {
-      const dpr = window.devicePixelRatio || 1;
-      const w = scope.clientWidth, h = scope.clientHeight, mid = h / 2;
-      if (scope.width !== Math.round(w * dpr)) {
-        scope.width = Math.round(w * dpr);
-        scope.height = Math.round(h * dpr);
-      }
-      g.setTransform(dpr, 0, 0, dpr, 0, 0);
+      const w = scopeWidth, h = scopeHeight, mid = h / 2;
+      g.setTransform(scopeDpr, 0, 0, scopeDpr, 0, 0);
       g.clearRect(0, 0, w, h);
       if (performance.now() > scopeUntil) {
-        summary.classList.remove("is-live");
+        stopScope();
         return;
       }
       analyser.getFloatTimeDomainData(buf);
@@ -691,14 +835,15 @@
 
   const stop = (finished = false) => {
     if (!playing) return;
-    cancelAnimationFrame(playing.frame);
-    if (playing.sound) {
-      const { master } = playing.sound;
+    const { frame, sound } = playing;
+    playing = null;
+    cancelAnimationFrame(frame);
+    if (sound) {
+      const { master } = sound;
       master.gain.setTargetAtTime(0, audio.currentTime, finished ? 0.4 : 0.03);
-      setTimeout(() => master.disconnect(), finished ? 3000 : 400);
+      sound.timer = setTimeout(sound.dispose, finished ? 3000 : 400);
       scopeUntil = performance.now() + (finished ? 2500 : 250);
     }
-    playing = null;
     document.title = title;
     playBtn.textContent = "Play the year";
     playBtn.setAttribute("aria-pressed", "false");
@@ -706,19 +851,22 @@
   };
 
   const play = () => {
+    if (document.hidden) return;
+    let sound = null;
     if (AudioCtx) {
-      audio ||= new AudioCtx();
-      audio.resume();
+      try {
+        audio ||= new AudioCtx();
+        audio.resume().catch(() => {});
+        sound = chain();
+      } catch {
+        // The visual timeline remains usable when audio is unavailable.
+      }
     }
     // Notes are scheduled on the audio clock; the picture follows the page clock,
     // so it still runs if the browser keeps the sound off.
     const t0 = performance.now() / 1000 + 0.12;
-    const sound = audio && chain();
     if (sound) {
-      const a0 = audio.currentTime + 0.12;
-      rows.forEach((r, k) => r.active.forEach((i) => {
-        if (i <= today) pluck(sound.input, pitch(k), a0 + i * STEP, r.counts[i] / maxCell);
-      }));
+      scheduleNotes(sound, -0.12);
       scopeUntil = Infinity;
       pluckString(sound.analyser);
     }
@@ -729,7 +877,9 @@
 
     let shown = -1;
     const frame = () => {
-      const pos = (performance.now() / 1000 - t0) / STEP;
+      const elapsed = performance.now() / 1000 - t0;
+      const pos = elapsed / STEP;
+      if (sound) scheduleNotes(sound, elapsed);
       const i = Math.floor(pos);
       if (i > today + 10) return stop(true);
       if (i >= 0 && i !== shown && i <= today) {
@@ -737,7 +887,7 @@
         scrubTo(i, true);
         document.title = `▶ ${dateLabel(i)} · ${title}`;
       }
-      score.style.setProperty("--ph", Math.max(0, Math.min(pos, today)) / n);
+      setPlayhead(Math.max(0, Math.min(pos, today)) / n);
       playing.frame = requestAnimationFrame(frame);
     };
     playing.frame = requestAnimationFrame(frame);
@@ -873,17 +1023,31 @@
   });
   list.addEventListener("focusout", (e) => { if (!playing && !career && !list.contains(e.relatedTarget)) reset(); });
 
-  const dayAt = (e) => {
+  const dayAt = (x) => {
     const box = wave.getBoundingClientRect();
-    return Math.floor(((e.clientX - box.left) / box.width) * n);
+    return Math.floor(((x - box.left) / box.width) * n);
   };
-  timeline.addEventListener("pointermove", (e) => { if (!playing && !career) scrubTo(dayAt(e)); });
+  let scrubFrame = 0, scrubX = 0;
+  const cancelScrub = () => {
+    cancelAnimationFrame(scrubFrame);
+    scrubFrame = 0;
+  };
+  timeline.addEventListener("pointermove", (e) => {
+    if (playing || career || document.hidden) return;
+    scrubX = e.clientX;
+    if (!scrubFrame) scrubFrame = requestAnimationFrame(() => {
+      scrubFrame = 0;
+      if (!playing && !career) scrubTo(dayAt(scrubX));
+    });
+  });
   timeline.addEventListener("pointerdown", (e) => {
     if (career) return;
+    cancelScrub();
     stop();
-    scrubTo(dayAt(e));
+    scrubTo(dayAt(e.clientX));
   });
   timeline.addEventListener("pointerleave", (e) => {
+    cancelScrub();
     if (!playing && !career && e.pointerType !== "touch" && document.activeElement !== wave) reset();
   });
   document.addEventListener("pointerdown", (e) => {
@@ -907,6 +1071,53 @@
 
   document.getElementById("updated").textContent = stamp.format(parse(data.updated));
   reset();
+
+  // A background or cached page must not retain sound, timers or render loops.
+  const pausePage = () => {
+    document.documentElement.classList.add("is-paused");
+    resetName();
+    cancelAnimationFrame(measureFrame);
+    measureFrame = 0;
+    cancelScrub();
+    clearTimeout(copied);
+    copyBtn.classList.remove("done");
+    copyBtn.setAttribute("aria-label", "Copy email address");
+    clearTimeout(leaveTimer);
+    clearTimeout(drawingTimer);
+    score.classList.remove("drawing");
+    stop();
+    if (!career) reset();
+    endFx();
+    sounds.forEach((sound) => sound.dispose());
+    stopScope();
+    settleRoll();
+    waveObserver.disconnect();
+    scopeObserver.disconnect();
+  };
+  const resumePage = () => {
+    document.documentElement.classList.remove("is-paused");
+    scheduleNameMeasure();
+    waveObserver.observe(wave);
+    scopeObserver.observe(summary);
+  };
+  document.addEventListener("visibilitychange", () => document.hidden ? pausePage() : resumePage());
+  window.addEventListener("pagehide", pausePage);
+  window.addEventListener("pageshow", () => { if (!document.hidden) resumePage(); });
+  motion.addEventListener("change", () => {
+    reduced = motion.matches;
+    if (reduced) {
+      resetName();
+      cancelAnimationFrame(measureFrame);
+      measureFrame = 0;
+      endFx();
+      stopScope();
+      settleRoll();
+    } else {
+      splitName();
+      scheduleNameMeasure();
+      if (playing?.sound) pluckString(playing.sound.analyser);
+    }
+  });
 
   // For anyone who opens the console: the same year, three days per bar.
   const BLOCKS = "▁▂▃▄▅▆▇█";
