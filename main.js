@@ -199,6 +199,281 @@
 
   const reduced = matchMedia("(prefers-reduced-motion: reduce)").matches;
 
+  // Pointing at a project makes its name do a tiny version of what the
+  // project does. Nothing moves before that, and leaving undoes all of it.
+
+  const make = (tag, className = "", text = "") => {
+    const e = document.createElement(tag);
+    e.className = className;
+    e.textContent = text;
+    return e;
+  };
+
+  let undoFx = [];
+  const endFx = () => {
+    undoFx.reverse().forEach((f) => f());
+    undoFx = [];
+  };
+  const kit = (r) => {
+    const undo = (f) => undoFx.push(f);
+    return {
+      a: r.el.querySelector(".title a"),
+      stack: r.el.querySelector(".stack"),
+      undo,
+      later: (ms, f) => { const t = setTimeout(f, ms); undo(() => clearTimeout(t)); },
+      put: (parent, e) => { parent.append(e); undo(() => e.remove()); return e; },
+      cls: (e, c) => {
+        e.classList.remove(c);
+        void e.offsetWidth; // so the animation starts over
+        e.classList.add(c);
+        undo(() => e.classList.remove(c));
+      },
+      anim: (e, frames, timing) => { const x = e.animate(frames, timing); undo(() => x.cancel()); return x; },
+    };
+  };
+
+  // JPEGView paints coarse blocks first. One pixelating filter per block size.
+  const svgDefs = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+  svgDefs.setAttribute("class", "fx-defs");
+  svgDefs.setAttribute("aria-hidden", "true");
+  svgDefs.innerHTML = [8, 4, 2].map((b) => `
+    <filter id="fx-px${b}" x="0" y="0" color-interpolation-filters="sRGB">
+      <feFlood x="${b / 2}" y="${b / 2}" width="1" height="1"/>
+      <feComposite width="${b}" height="${b}"/>
+      <feTile result="grid"/>
+      <feComposite in="SourceGraphic" in2="grid" operator="in"/>
+      <feMorphology operator="dilate" radius="${b / 2}"/>
+    </filter>`).join("");
+  document.body.append(svgDefs);
+
+  // Splits a name into letters once, so they can move on their own.
+  const splitLetters = (a) => {
+    if (!a.querySelector(".fx-l")) {
+      const word = a.textContent;
+      a.textContent = "";
+      [...word].forEach((ch) => a.append(ch === " " ? ch : make("span", "fx-l", ch)));
+    }
+    return [...a.querySelectorAll(".fx-l")];
+  };
+
+  // Splits a rectangle by value, alternating sides, the way a disk treemap does.
+  const treemap = (items, x, y, w, h, out = []) => {
+    if (items.length === 1) { out.push({ ...items[0], x, y, w, h }); return out; }
+    const total = sum(items.map((t) => t.v));
+    let k = 1, acc = items[0].v;
+    while (k < items.length - 1 && acc + items[k].v <= total / 2) acc += items[k++].v;
+    const f = acc / total;
+    if (w >= h) {
+      treemap(items.slice(0, k), x, y, w * f, h, out);
+      treemap(items.slice(k), x + w * f, y, w * (1 - f), h, out);
+    } else {
+      treemap(items.slice(0, k), x, y, w, h * f, out);
+      treemap(items.slice(k), x, y + h * f, w, h * (1 - f), out);
+    }
+    return out;
+  };
+
+  const tricks = {
+    // A tank filling up
+    fuelmate: (k) => k.cls(k.a, "fx-fuel"),
+
+    // The heading as typed, then as rendered
+    "markdown-pdf": (k) => {
+      k.put(k.a, make("span", "fx-hash", "#"));
+      k.later(560, () => k.cls(k.a, "fx-rendered"));
+    },
+
+    // Every letter is a request. They lift by response time, sort themselves
+    // into a percentile curve with the slow tail in blue, then settle back.
+    pm2: (k) => {
+      const ls = splitLetters(k.a);
+      const ms = [41, 12, 8, 95, 23, 17, 380, 30, 14, 52, 9, 26, 640, 19];
+      const time = (i) => ms[i % ms.length];
+      const em = parseFloat(getComputedStyle(k.a).fontSize);
+      const ink = getComputedStyle(k.a).color;
+      const accent = getComputedStyle(document.body).getPropertyValue("--accent").trim();
+      const order = ls.map((_, i) => i).sort((p, q) => time(p) - time(q));
+      const gap = (k.a.offsetWidth - sum(ls.map((s) => s.offsetWidth))) / (ls.length - 1);
+      const to = [];
+      let x = 0;
+      order.forEach((i) => { to[i] = x; x += ls[i].offsetWidth + gap; });
+      const move = "cubic-bezier(0.6, 0, 0.2, 1)";
+      ls.forEach((s, i) => {
+        const y = -Math.log(time(i) / 8) / Math.log(80) * em * 0.8; // log scale, 8 ms to 640 ms
+        const at = (dx) => `translate(${dx}px, ${y}px)`;
+        const timing = { duration: 2400, delay: i * 15 };
+        k.anim(s, [
+          { offset: 0, transform: "none", easing: "cubic-bezier(0.2, 0.7, 0.2, 1)" },
+          { offset: 0.15, transform: at(0) },
+          { offset: 0.22, transform: at(0), easing: move },
+          { offset: 0.5, transform: at(to[i] - s.offsetLeft) },
+          { offset: 0.74, transform: at(to[i] - s.offsetLeft), easing: move },
+          { offset: 0.95, transform: "none" },
+          { offset: 1, transform: "none" },
+        ], timing);
+        if (order.indexOf(i) >= ls.length - 2) {
+          k.anim(s, [
+            { offset: 0, color: ink }, { offset: 0.42, color: ink }, { offset: 0.52, color: accent },
+            { offset: 0.74, color: accent }, { offset: 0.9, color: ink }, { offset: 1, color: ink },
+          ], timing);
+        }
+      });
+    },
+
+    // Squeezed, and the label moves up into the space it saved
+    "pdf-compressor": (k) => {
+      const w = k.a.offsetWidth;
+      const steps = [1, 0.5, 0.77, 0.64, 0.7];
+      const timing = { duration: 900, fill: "forwards" };
+      k.anim(k.a, steps.map((s) => ({ transform: `scaleX(${s})`, easing: "ease-in-out" })), timing);
+      k.anim(k.stack, steps.map((s) => ({ transform: `translateX(${-(1 - s) * w}px)`, easing: "ease-in-out" })), timing);
+    },
+
+    // 65 million lines, at the speed the native build reads them
+    "pm2-native": (k) => {
+      const was = k.stack.textContent;
+      k.undo(() => { k.stack.textContent = was; });
+      k.cls(k.stack, "fx-count");
+      const t0 = performance.now();
+      let frame = 0;
+      const tick = () => {
+        const p = Math.min(1, (performance.now() - t0) / 2000);
+        k.stack.textContent = p < 1 ? `${(65 * p).toFixed(1)}M lines` : "65M lines in 2 s";
+        if (p < 1) frame = requestAnimationFrame(tick);
+      };
+      tick();
+      k.undo(() => cancelAnimationFrame(frame));
+    },
+
+    // Coarse blocks first, sharp a moment later
+    jpegview: (k) => {
+      const paint = (b) => { k.a.style.filter = b ? `url(#fx-px${b})` : ""; };
+      k.undo(() => paint(0));
+      paint(8);
+      k.later(90, () => paint(4));
+      k.later(180, () => paint(2));
+      k.later(270, () => paint(0));
+    },
+
+    // A box dragged over the text, then the text inside it read
+    glyph: (k) => {
+      const box = k.put(k.a, make("span", "fx-box"));
+      k.anim(box, [{ width: "0px", height: "0px" },
+        { width: `${k.a.offsetWidth + 8}px`, height: `${k.a.offsetHeight + 2}px` }],
+      { duration: 420, easing: "cubic-bezier(0.3, 0.6, 0.3, 1)", fill: "forwards" });
+      k.later(460, () => box.classList.add("is-read"));
+    },
+
+    // A wave running through the letters
+    sonograph: (k) => {
+      const a = "0.2em";
+      const wave = ["0", `-${a}`, "0", a, "0"].map((y) => ({ transform: `translateY(${y})`, easing: "ease-in-out" }));
+      splitLetters(k.a).forEach((s, i) =>
+        k.anim(s, wave, { duration: 1300, delay: i * 85, iterations: Infinity }));
+    },
+
+    // The red ball, hopping along the tops of the letters and off the end
+    bounce: (k) => {
+      const text = k.a.firstChild;
+      const cs = getComputedStyle(k.a);
+      const fs = parseFloat(cs.fontSize);
+      const g = document.createElement("canvas").getContext("2d");
+      g.font = `${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+      const x = g.measureText("x");
+      const xh = x.actualBoundingBoxAscent, cap = g.measureText("B").actualBoundingBoxAscent;
+      const ascent = x.fontBoundingBoxAscent ?? fs * 0.9;
+      const box = k.a.getBoundingClientRect();
+      const range = document.createRange();
+      const top = (i) => {
+        range.setStart(text, i);
+        range.setEnd(text, i + 1);
+        const b = range.getBoundingClientRect();
+        const tall = /[A-Zbdfhklt]/.test(text.data[i]);
+        return { x: b.left - box.left + b.width / 2, y: b.top - box.top + ascent - (tall ? cap : xh) };
+      };
+      const stops = [0, 2, text.data.length - 1].map(top);
+      const d = fs * 0.42;
+
+      const ball = k.put(k.a, make("span", "fx-ball"));
+      const lift = make("span");
+      const core = make("span");
+      ball.append(lift);
+      lift.append(core);
+      core.style.width = core.style.height = `${d}px`;
+
+      const T = 1500;
+      const lands = [330, 690, 1050].map((t) => t / T);
+      const fall = "cubic-bezier(0.5, 0, 1, 1)", rise = "cubic-bezier(0, 0, 0.5, 1)";
+      const sit = (s) => s.y - d;
+      const apex = (s, t) => Math.min(s.y, t.y) - d - fs * 0.55;
+      const timing = { duration: T };
+
+      k.anim(ball, [
+        { offset: 0, transform: `translateX(${stops[0].x - d / 2}px)`, opacity: 0 },
+        { offset: 0.06, opacity: 1 },
+        { offset: lands[0], transform: `translateX(${stops[0].x - d / 2}px)` },
+        { offset: lands[1], transform: `translateX(${stops[1].x - d / 2}px)` },
+        { offset: lands[2], transform: `translateX(${stops[2].x - d / 2}px)` },
+        { offset: 0.9, opacity: 1 },
+        { offset: 1, transform: `translateX(${stops[2].x + fs * 1.1}px)`, opacity: 0 },
+      ], timing);
+      k.anim(lift, [
+        { offset: 0, transform: `translateY(${sit(stops[0]) - fs * 1.3}px)`, easing: fall },
+        { offset: lands[0], transform: `translateY(${sit(stops[0])}px)`, easing: rise },
+        { offset: (lands[0] + lands[1]) / 2, transform: `translateY(${apex(stops[0], stops[1])}px)`, easing: fall },
+        { offset: lands[1], transform: `translateY(${sit(stops[1])}px)`, easing: rise },
+        { offset: (lands[1] + lands[2]) / 2, transform: `translateY(${apex(stops[1], stops[2])}px)`, easing: fall },
+        { offset: lands[2], transform: `translateY(${sit(stops[2])}px)`, easing: rise },
+        { offset: lands[2] + (1 - lands[2]) * 0.35, transform: `translateY(${apex(stops[2], stops[2])}px)`, easing: fall },
+        { offset: 1, transform: `translateY(${ascent + fs * 0.5}px)` },
+      ], timing);
+      k.anim(core, [{ offset: 0, transform: "none" }, ...lands.flatMap((l) => [
+        { offset: l - 0.025, transform: "none" },
+        { offset: l, transform: "scale(1.35, 0.65)" },
+        { offset: l + 0.04, transform: "none" },
+      ]), { offset: 1, transform: "none" }], timing);
+    },
+
+    // Heard as "Whisper", then corrected after the pause
+    whistle: (k) => {
+      const say = k.put(k.a, make("span", "fx-say"));
+      const said = make("span");
+      say.append(said, make("span", "fx-caret"));
+      k.cls(k.a, "fx-hide");
+      let t = 0;
+      const at = (ms, f) => { t += ms; k.later(t, f); };
+      const type = (s) => [...s].forEach((ch) => at(50 + Math.random() * 45, () => { said.textContent += ch; }));
+      type("Whisper");
+      for (let i = 0; i < 3; i++) at(i ? 45 : 480, () => { said.textContent = said.textContent.slice(0, -1); });
+      type("tle");
+      at(140, () => say.classList.add("is-final"));
+    },
+
+    // This year's commits as a treemap, the way Quarry draws a drive.
+    // Its own tile is the blue one.
+    quarry: (k, r) => {
+      const map = k.put(k.a.parentElement, make("span", "fx-map"));
+      map.style.left = `${k.stack.offsetLeft}px`;
+      k.cls(k.stack, "fx-gone");
+      const items = rows.map((row) => ({ row, v: sum(row.counts) })).filter((t) => t.v).sort((p, q) => q.v - p.v);
+      treemap(items, 0, 0, map.clientWidth, map.clientHeight).forEach((t, i) => {
+        const s = make("span", t.row === r ? "is-me" : "");
+        Object.assign(s.style, { left: `${t.x}px`, top: `${t.y}px`, width: `${t.w}px`, height: `${t.h}px` });
+        s.style.setProperty("--i", i);
+        map.append(s);
+      });
+    },
+
+    // Outlines, then subpixel colour fringes, then settled native text
+    nanoui: (k) => k.cls(k.a, "fx-raster"),
+  };
+
+  const startFx = (r) => {
+    endFx();
+    const trick = tricks[r.el.dataset.project];
+    if (trick && !reduced) trick(kit(r), r);
+  };
+
   // The big year rolls, like an odometer, into whatever is in focus: a day,
   // or the months a project was built in. Later rolls up, earlier rolls down.
 
@@ -263,6 +538,7 @@
   let current = -1;
 
   const clear = () => {
+    endFx();
     lit.forEach((e) => (e.classList.contains("hl") ? e.remove() : e.classList.remove("hit")));
     lit = [];
     score.classList.remove("is-row", "is-scrub");
@@ -289,6 +565,7 @@
     const built = r.active.length ? ` Built ${span(r.active[0], r.active.at(-1))}.` : "";
     show(`${r.el.dataset.detail}${built}`);
     if (r.active.length) roll(monthsOf(r), r.active[0]);
+    startFx(r);
   };
 
   // During playback a quiet day keeps the last line, so the text doesn't flicker.
@@ -592,7 +869,7 @@
   list.addEventListener("focusin", (e) => {
     if (playing || career) return;
     const row = rows.find((r) => r.el === e.target.closest(".work"));
-    if (row) focusRow(row);
+    if (row && !row.el.classList.contains("is-on")) focusRow(row);
   });
   list.addEventListener("focusout", (e) => { if (!playing && !career && !list.contains(e.relatedTarget)) reset(); });
 

@@ -424,7 +424,13 @@ ul, ol { list-style: none; }
   font-size: var(--title);
   white-space: nowrap;
 }
-.title a { text-decoration: none; }
+.title { position: relative; }
+.title a {
+  position: relative;
+  text-decoration: none;
+  transform-origin: left center;
+  transition: text-decoration-color 0.15s, font-weight 0.3s;
+}
 .title a:hover { text-decoration: underline; text-decoration-color: currentColor; }
 
 .stack { color: var(--ink-3); font-size: calc(var(--small) * 0.94); }
@@ -449,6 +455,112 @@ ul, ol { list-style: none; }
   grid-column: 9 / 13;
   position: relative;
   align-self: stretch;
+}
+
+/* Project tricks. Each name does a small version of its project when pointed at. */
+
+.fx-defs { position: absolute; width: 0; height: 0; }
+.title a.fx-hide { color: transparent; }
+.fx-gone { visibility: hidden; }
+
+/* FuelMate: the name fills up from the bottom */
+.title a.fx-fuel {
+  background: linear-gradient(to top, var(--accent) 50%, var(--ink) 50%) 0 0 / 100% 200%;
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
+  text-decoration-color: var(--accent);
+  animation: fuel 1.5s cubic-bezier(0.4, 0.1, 0.3, 1) forwards;
+}
+@keyframes fuel { to { background-position: 0 100%; } }
+
+/* Markdown PDF Studio: a heading marker in the margin, then the heading rendered */
+.fx-hash {
+  position: absolute;
+  right: calc(100% + 0.4em);
+  font-family: var(--mono);
+  font-size: 0.85em;
+  color: var(--ink-3);
+  animation: fade-in 0.12s backwards;
+  transition: opacity 0.25s, transform 0.25s;
+}
+.title a.fx-rendered { font-weight: 600; }
+.fx-rendered .fx-hash { opacity: 0; transform: translateX(-0.5em); }
+@keyframes fade-in { from { opacity: 0; } }
+
+.fx-count { color: var(--ink-2); }
+
+/* Glyph: a dashed box dragged over the name */
+.fx-box {
+  position: absolute;
+  left: -4px;
+  top: -1px;
+  border: 1px dashed var(--accent);
+  pointer-events: none;
+  transition: background-color 0.2s;
+}
+.fx-box.is-read { background: color-mix(in srgb, var(--accent) 16%, transparent); border-style: solid; }
+
+.fx-l { display: inline-block; }
+
+/* Bounce: the ball from the Nokia game */
+.fx-ball { position: absolute; left: 0; top: 0; pointer-events: none; }
+.fx-ball span { display: block; }
+.fx-ball span span {
+  border-radius: 50%;
+  transform-origin: 50% 100%;
+  background: radial-gradient(circle at 34% 30%, #ff9a8f 0 14%, #e3261c 42%, #9e1009 100%);
+}
+
+/* Whistle: grey while it's still listening, ink once it's sure */
+.fx-say {
+  position: absolute;
+  left: 0;
+  top: 0;
+  white-space: pre;
+  color: var(--ink-3);
+  pointer-events: none;
+  transition: color 0.25s;
+}
+.fx-say.is-final { color: var(--ink); }
+.fx-caret {
+  display: inline-block;
+  width: 1px;
+  height: 0.9em;
+  margin-left: 1px;
+  vertical-align: -0.1em;
+  background: var(--accent);
+}
+.is-final .fx-caret { opacity: 0; transition: opacity 0.3s 0.5s; }
+
+/* Quarry: a treemap where the label was */
+.fx-map {
+  position: absolute;
+  top: 50%;
+  translate: 0 -50%;
+  width: calc(var(--small) * 8);
+  height: calc(var(--small) * 1.3);
+  pointer-events: none;
+}
+.fx-map > span {
+  position: absolute;
+  border: 1px solid var(--bg);
+  background: var(--ink-3);
+  animation: fade-in 0.25s backwards;
+  animation-delay: calc(var(--i) * 45ms);
+}
+.fx-map > .is-me { background: var(--accent); }
+
+/* nanoui: glyph outlines, then rasterised with subpixel fringes, then settled */
+.title a.fx-raster { animation: raster 1.2s ease-out both; }
+@keyframes raster {
+  0%, 40% { color: transparent; -webkit-text-stroke: 0.6px var(--ink-2); }
+  58% {
+    color: var(--ink);
+    -webkit-text-stroke: 0 transparent;
+    text-shadow: -0.8px 0 rgb(255 40 40 / 0.65), 0.8px 0 rgb(40 110 255 / 0.65);
+  }
+  100% { color: var(--ink); text-shadow: 0 0 transparent, 0 0 transparent; }
 }
 
 /* Focus states: one project, or one day */
