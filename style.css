@@ -12,14 +12,18 @@
   --serif: "Newsreader", "Iowan Old Style", Georgia, serif;
   --mono: "IBM Plex Mono", ui-monospace, "Cascadia Mono", Consolas, monospace;
 
-  --pad-y: clamp(20px, 4.8vh, 64px);
+  --banner-height: 18vh;
+  --banner-height: 18svh;
+  --banner-brightness: 1;
+  --banner-saturation: 0.94;
+  --pad-y: clamp(16px, 2.5vh, 32px);
   --pad-x: clamp(16px, 4.4vw, 80px);
   --gap: clamp(16px, 1.9vw, 36px);
-  --row: clamp(24px, 4.3vh, 44px);
-  --wave: clamp(36px, 7.4vh, 76px);
+  --row: clamp(24px, 3.2vh, 36px);
+  --wave: clamp(32px, 6vh, 64px);
   --tick: clamp(8px, 1.9vh, 18px);
 
-  --display: clamp(32px, min(6.6vh, 4.6vw), 76px);
+  --display: clamp(36px, min(6.4vh, 4.6vw), 72px);
   --lead: clamp(15px, min(2.5vh, 1.45vw), 22px);
   --title: clamp(14px, min(2.25vh, 1.25vw), 18px);
   --body: clamp(13px, min(2.05vh, 1.12vw), 16px);
@@ -35,6 +39,8 @@
     --rule: #2a2a28;
     --dot: #3a3936;
     --accent: #8f9cff;
+    --banner-brightness: 0.8;
+    --banner-saturation: 0.82;
   }
 }
 
@@ -81,12 +87,35 @@ ul, ol { list-style: none; }
   column-gap: var(--gap);
 }
 
+/* A shallow panorama fades into the page background. */
+.landscape {
+  position: relative;
+  height: var(--banner-height);
+  overflow: hidden;
+  background: #669eae;
+  pointer-events: none;
+}
+.landscape img {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+  object-position: 50% 53%;
+  filter: brightness(var(--banner-brightness)) saturate(var(--banner-saturation));
+}
+.landscape::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(to bottom, transparent 64%, var(--bg));
+}
 .page {
-  min-height: 100vh;
-  min-height: 100svh;
+  min-height: calc(100vh - var(--banner-height));
+  min-height: calc(100svh - var(--banner-height));
   max-width: 1680px;
   margin: 0 auto;
   padding: var(--pad-y) var(--pad-x);
+  padding-top: calc(var(--pad-y) + 10px);
   display: grid;
   grid-template-rows: auto 1fr auto;
 }
@@ -114,7 +143,10 @@ ul, ol { list-style: none; }
 
 .contact {
   grid-column: 9 / 13;
-  font-size: clamp(10.5px, min(1.7vh, 0.98vw), 13.5px);
+  display: flex;
+  flex-direction: column;
+  gap: 2.5px;
+  font-size: calc(clamp(10.5px, min(1.7vh, 0.98vw), 13.5px) + 1px);
   line-height: 1.8;
   color: var(--ink-2);
   margin-top: -0.35em;
@@ -134,6 +166,7 @@ ul, ol { list-style: none; }
   stroke-linejoin: round;
 }
 .ic.solid { fill: currentColor; stroke: none; width: 1.1em; height: 1.1em; }
+.contact > li > svg.ic { stroke: var(--ink-2); }
 
 /* A presence light: lit and breathing while it's daytime in Surat */
 .presence { display: grid; place-items: center; }
@@ -178,6 +211,7 @@ ul, ol { list-style: none; }
 .copy.done .i-done { opacity: 1; transform: none; }
 
 .social { gap: 1.4em; }
+.contact .social { margin-top: 2px; gap: 1.1em; }
 .social a { display: inline-flex; align-items: center; gap: 0.55em; }
 .social a .ic { color: var(--ink-2); transition: color 0.15s; }
 .social a:hover .ic { color: var(--ink); }
@@ -186,12 +220,12 @@ ul, ol { list-style: none; }
 
 .score {
   align-self: center;
-  margin-top: clamp(24px, 6vh, 72px);
+  margin-top: calc(clamp(20px, 3vh, 36px) - 9px);
 }
 
 .summary {
   align-items: end;
-  padding-bottom: clamp(10px, 2vh, 22px);
+  padding-bottom: clamp(8px, 1.5vh, 16px);
   border-bottom: 1px solid var(--rule);
 }
 
@@ -200,11 +234,16 @@ ul, ol { list-style: none; }
   display: flex;
   flex-direction: column;
   align-items: flex-start;
-  gap: clamp(10px, 2.4vh, 22px);
+  gap: calc(clamp(10px, 1.8vh, 18px) + 4px);
 }
 
 /* Side projects / Experience. Hovering Experience previews it, a click keeps it. */
-.modes { display: flex; gap: 1.5em; }
+.modes {
+  display: flex;
+  gap: 1.5em;
+  font-size: clamp(13px, 0.85vw, 14px);
+  transform: translateY(-3px);
+}
 .mode {
   padding: 0 0 0.3em;
   border: 0;
@@ -221,7 +260,7 @@ ul, ol { list-style: none; }
 
 .total {
   display: flex;
-  font-size: var(--display);
+  font-size: calc(var(--display) * 0.88);
   line-height: 0.75;
   letter-spacing: -0.03em;
   font-variant-numeric: lining-nums tabular-nums;
@@ -575,7 +614,7 @@ ul, ol { list-style: none; }
 /* Footer */
 
 .foot {
-  margin-top: clamp(16px, 3.4vh, 40px);
+  margin-top: clamp(14px, 2.2vh, 28px);
   color: var(--ink-3);
 }
 .source { grid-column: 1 / 9; }
@@ -633,12 +672,29 @@ ul, ol { list-style: none; }
   .intro, .note, .desc { grid-column: 4 / 10; }
   .contact, .timeline, .track, .hint { grid-column: 10 / 13; }
   .source { grid-column: 1 / 10; }
+  .work .title { flex-wrap: wrap; gap: 0 0.5em; }
+  .job .title { white-space: normal; }
 }
 
 /* Narrow screens: stack everything, keep the timeline */
 
+/* Tighten vertical spacing in short desktop windows. */
+@media (min-width: 861px) and (max-height: 700px) {
+  :root {
+    --pad-y: 14px;
+    --row: 21px;
+    --wave: 32px;
+    --display: 36px;
+  }
+  .score { margin-top: 7px; }
+  .summary { padding-bottom: 8px; }
+  .head { gap: 14px; }
+  .foot { margin-top: 12px; }
+}
+
 @media (max-width: 860px) {
   :root {
+    --pad-y: 28px;
     --display: clamp(38px, 11vw, 56px);
     --lead: 17px;
     --title: 16px;
@@ -647,6 +703,7 @@ ul, ol { list-style: none; }
     --wave: 56px;
   }
 
+  .landscape img { object-position: 70% 50%; }
   .page { grid-template-rows: auto auto auto; }
   .name, .intro, .contact, .note, .timeline, .title, .desc, .source, .hint { grid-column: 1 / -1; }
   .hint { margin-top: 10px; }
