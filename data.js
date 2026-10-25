@@ -4,8 +4,6 @@ window.ACTIVITY = {
   "from": "2026-07-01",
   "to": "2026-10-31",
   "first": "2026-07-18",
-  "weekendShare": 0.65,
-  "peakHour": 20,
   "projects": {
     "fuelmate": {
       "2026-07-18": 4,

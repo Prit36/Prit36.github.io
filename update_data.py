@@ -72,25 +72,21 @@ def timeline_svg(data, colors):
     for counts in data["projects"].values():
         totals.update(counts)
     peak = max(totals.values())
-    active = sum(1 for c in totals.values() if c)
-    first = dt.date.fromisoformat(data["first"])
 
-    width, top, half = 880, 34, 30
+    width, top, half = 880, 6, 30
     mid = top + half
     slot = width / len(days)
     bar = max(1, round(slot * 0.6))
     mono = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
     parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="128" '
-        f'viewBox="0 0 {width} 128" font-family="{mono}" font-size="12">',
-        f'<text x="0" y="13" fill="{colors["muted"]}">{sum(totals.values())} commits on {active} days, '
-        f'since {first.day} {MONTHS[first.month - 1]} {first.year}</text>',
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="100" '
+        f'viewBox="0 0 {width} 100" font-family="{mono}" font-size="12">',
     ]
     for i, day in enumerate(days):
         x = i * slot
         if day.day == 1:
             parts.append(f'<rect x="{x:.1f}" y="{top}" width="1" height="{half * 2 + 6}" fill="{colors["rule"]}"/>')
-            parts.append(f'<text x="{x + 5:.1f}" y="118" fill="{colors["muted"]}">{MONTHS[day.month - 1]}</text>')
+            parts.append(f'<text x="{x + 5:.1f}" y="90" fill="{colors["muted"]}">{MONTHS[day.month - 1]}</text>')
         if day > today:
             continue
         c = totals.get(day.isoformat(), 0)
@@ -123,15 +119,12 @@ def main():
     today = dt.datetime.now(TZ).date()
     first = min(times).date()
     last_day = calendar.monthrange(today.year, today.month)[1]
-    hours = Counter(t.hour for t in times)
 
     data = {
         "updated": today.isoformat(),
         "from": first.replace(day=1).isoformat(),
         "to": today.replace(day=last_day).isoformat(),
         "first": first.isoformat(),
-        "weekendShare": round(sum(t.weekday() >= 5 for t in times) / len(times), 2),
-        "peakHour": hours.most_common(1)[0][0],
         "projects": projects,
     }
     body = json.dumps(data, indent=2)

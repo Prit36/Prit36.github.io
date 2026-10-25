@@ -29,7 +29,6 @@
   const timeline = document.querySelector(".timeline");
   const wave = document.getElementById("wave");
   const axis = document.getElementById("axis");
-  const totalEl = document.getElementById("total");
   const noteEl = document.getElementById("note");
 
   const rows = [...document.querySelectorAll(".work")].map((el) => {
@@ -40,7 +39,7 @@
     }
     const active = counts.flatMap((c, i) => (c ? [i] : []));
     return {
-      el, counts, active, total: sum(counts), ticks: [],
+      el, counts, active, ticks: [],
       name: el.querySelector(".title a").textContent,
       track: el.querySelector(".track"),
     };
@@ -117,24 +116,14 @@
   fitBars();
   new ResizeObserver(fitBars).observe(wave);
 
-  // The big number and the line beside it describe whatever is in focus.
+  // The line beside the year describes whatever is in focus.
 
-  const hour = (h) => `${h % 12 || 12} ${h < 12 ? "am" : "pm"}`;
-  const plural = (c) => (c === 1 ? "commit" : "commits");
-  const all = sum(totals);
-  const activeDays = totals.filter(Boolean).length;
-  const overview =
-    `commits since ${dayMonth.format(parse(data.first))} ${data.first.slice(0, 4)}, ` +
-    `on ${activeDays} different days. ${Math.round(data.weekendShare * 100)}% of them ` +
-    `on a weekend, most often around ${hour(data.peakHour)}.`;
-
-  const show = (num, note) => {
-    totalEl.textContent = num;
-    noteEl.textContent = note;
-  };
+  const overview = noteEl.textContent.trim();
+  const show = (note) => { noteEl.textContent = note; };
 
   const span = (a, b) => {
     const da = dateOf(a), db = dateOf(b);
+    if (a === b) return `on ${dayMonth.format(da)}`;
     const first = da.getUTCMonth() === db.getUTCMonth() ? da.getUTCDate() : dayMonth.format(da);
     return `between ${first} and ${dayMonth.format(db)}`;
   };
@@ -152,7 +141,7 @@
   const reset = () => {
     clear();
     current = -1;
-    show(all, overview);
+    show(overview);
   };
 
   const focusRow = (r) => {
@@ -165,12 +154,8 @@
       wave.append(e);
       lit.push(e);
     });
-    const [a, b] = [r.active[0], r.active.at(-1)];
-    let when = "none yet";
-    if (r.total === 1) when = `on ${dayMonth.format(dateOf(a))}`;
-    else if (r.active.length === 1) when = `all on ${dayMonth.format(dateOf(a))}`;
-    else if (r.active.length) when = `${span(a, b)}, on ${r.active.length} days`;
-    show(r.total, `${plural(r.total)} to ${r.name}, ${when}.`);
+    const built = r.active.length ? ` Built ${span(r.active[0], r.active.at(-1))}.` : "";
+    show(`${r.el.dataset.detail}${built}`);
   };
 
   const scrubTo = (i) => {
@@ -190,9 +175,7 @@
       lit.push(r.ticks[i]);
     });
     const d = `${weekday.format(dateOf(i))}, ${dayMonth.format(dateOf(i))}`;
-    show(totals[i], on.length
-      ? `${plural(totals[i])} on ${d}: ${and.format(on.map((r) => r.name))}.`
-      : `commits on ${d}.`);
+    show(on.length ? `${d}: worked on ${and.format(on.map((r) => r.name))}.` : `${d}: nothing public.`);
   };
 
   const list = document.querySelector(".works");

@@ -142,7 +142,12 @@ ul, ol { list-style: none; }
 .note {
   grid-column: 4 / 9;
   max-width: 31em;
-  min-height: 2.8em;
+  /* Fixed height, text sits at the bottom: a longer description grows
+     upward into the space above instead of pushing the list down. */
+  height: 4.2em;
+  display: flex;
+  flex-direction: column;
+  justify-content: flex-end;
   font-size: var(--body);
   line-height: 1.4;
   color: var(--ink-2);
@@ -314,8 +319,8 @@ ul, ol { list-style: none; }
   }
 
   .score { margin-top: 36px; }
-  .total { grid-column: 1 / 5; }
-  .note { grid-column: 5 / -1; min-height: 0; }
+  .total { grid-column: 1 / -1; }
+  .note { grid-column: 1 / -1; height: auto; margin-top: 12px; }
   .timeline { margin-top: 22px; }
 
   .works { padding-top: 6px; }

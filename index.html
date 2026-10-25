@@ -20,89 +20,100 @@
     <header class="top grid">
       <h1 class="name">Prit<br>Prajapati</h1>
       <p class="intro">
-        I write software that runs on <em>your own machine</em>. Fast native tools
-        for Windows, and browser apps that never upload your files. Mostly in Rust,
-        C++, Go and TypeScript.
+        Full-stack developer by day. In the evenings and on weekends I write
+        software that runs on <em>your own machine</em>: fast native tools for
+        Windows, and browser apps that never upload your files.
       </p>
       <ul class="contact mono">
         <li>Surat, Gujarat, India</li>
         <li><span id="clock">--:--</span> IST</li>
         <li><a href="mailto:pprit362@gmail.com">pprit362@gmail.com</a></li>
-        <li><a href="https://github.com/Prit36">github.com/Prit36</a></li>
+        <li><a href="https://github.com/Prit36">GitHub</a> &middot; <a href="https://www.linkedin.com/in/prit-prajapati36">LinkedIn</a></li>
       </ul>
     </header>
 
     <section class="score" aria-label="Work in 2026">
       <div class="summary grid">
-        <p class="total" id="total">339</p>
+        <p class="total">2026</p>
         <p class="note" id="note">
-          commits since 18 July 2026, on 63 different days. 65% of them on a weekend,
-          most often around 8 pm.
+          Twelve projects since July. Point at one to see what it does and when I built it.
         </p>
         <div class="timeline">
           <div class="wave" id="wave" tabindex="0" role="img"
-               aria-label="Commits per day, July to October 2026. Use the arrow keys to step through days."></div>
+               aria-label="Work per day, July to October 2026. Use the arrow keys to step through days."></div>
           <div class="axis mono" id="axis" aria-hidden="true"></div>
         </div>
       </div>
 
       <ol class="works">
-        <li class="work grid" data-project="fuelmate">
+        <li class="work grid" data-project="fuelmate"
+            data-detail="A Kotlin app for logging fuel fill-ups and keeping track of each vehicle's mileage.">
           <p class="title"><a href="https://github.com/Prit36/fuelmate">FuelMate</a> <span class="stack mono">Kotlin</span></p>
           <p class="desc">Android app for logging fuel fill-ups and mileage.</p>
           <div class="track" aria-hidden="true"></div>
         </li>
-        <li class="work grid" data-project="markdown-pdf">
+        <li class="work grid" data-project="markdown-pdf"
+            data-detail="Paste or upload Markdown, get a PDF with real, selectable text. The parser is Rust compiled to Wasm, and nothing leaves the browser.">
           <p class="title"><a href="https://github.com/Prit36/markdown-pdf-studio">Markdown PDF Studio</a> <span class="stack mono">Rust/Wasm</span></p>
           <p class="desc">Markdown to PDF in the browser, with selectable text.</p>
           <div class="track" aria-hidden="true"></div>
         </li>
-        <li class="work grid" data-project="pm2">
+        <li class="work grid" data-project="pm2"
+            data-detail="Drop in raw logs or whole archives and get latency percentiles, slow endpoints and Excel reports. Runs in the browser or as a desktop app.">
           <p class="title"><a href="https://github.com/Prit36/pm2-log-analyzer">PM2 Log Analyzer</a> <span class="stack mono">TS, Rust</span></p>
           <p class="desc">Reads PM2, MongoDB and Nginx logs. With Vishal Talaviya. <a class="live mono" href="https://pm2-logs-analyzer.pprit362.workers.dev/">live</a></p>
           <div class="track" aria-hidden="true"></div>
         </li>
-        <li class="work grid" data-project="pdf-compressor">
+        <li class="work grid" data-project="pdf-compressor"
+            data-detail="Re-encodes and downscales the images inside a PDF and leaves text and vectors alone. Rust and Wasm, running in a Web Worker.">
           <p class="title"><a href="https://github.com/Prit36/pdf-compressor-wasm">PDF Compressor</a> <span class="stack mono">Rust/Wasm</span></p>
           <p class="desc">Shrinks image-heavy PDFs in the browser. Nothing uploads.</p>
           <div class="track" aria-hidden="true"></div>
         </li>
-        <li class="work grid" data-project="pm2-native">
+        <li class="work grid" data-project="pm2-native"
+            data-detail="The log analyzer rebuilt as native apps, in Rust with iced and in C++23 with Dear ImGui. A 5.2 GB, 65-million-line log loads in about 2 seconds.">
           <p class="title"><a href="https://github.com/Prit36/pm2-log-analyzer-rust">PM2 Native</a> <span class="stack mono">Rust, C++</span></p>
           <p class="desc">Rewritten in <a href="https://github.com/Prit36/pm2-log-analyzer-rust">Rust</a> and <a href="https://github.com/Prit36/pm2-log-analyzer-cpp">C++23</a>. 5&nbsp;GB of logs in under 2&nbsp;s.</p>
           <div class="track" aria-hidden="true"></div>
         </li>
-        <li class="work grid" data-project="jpegview">
+        <li class="work grid" data-project="jpegview"
+            data-detail="A fork of an old Windows image viewer, rebuilt around parallel JPEG decoding, AVX2 and GPU HEIF. Large photos show in under 100 ms.">
           <p class="title"><a href="https://github.com/Prit36/jpegview">JPEGView</a> <span class="stack mono">C++, fork</span></p>
           <p class="desc">An old image viewer, made fast. First paint under 100&nbsp;ms.</p>
           <div class="track" aria-hidden="true"></div>
         </li>
-        <li class="work grid" data-project="glyph">
+        <li class="work grid" data-project="glyph"
+            data-detail="Press Ctrl+Alt+T, draw a box over any text on screen, and copy it. A small C++20 tray app that uses the OCR built into Windows.">
           <p class="title"><a href="https://github.com/Prit36/Glyph">Glyph</a> <span class="stack mono">C++</span></p>
           <p class="desc">Copy text from anything on screen, with offline OCR.</p>
           <div class="track" aria-hidden="true"></div>
         </li>
-        <li class="work grid" data-project="sonograph">
+        <li class="work grid" data-project="sonograph"
+            data-detail="Number sequences, curves and rhythm rules, turned into sound and animation. Plain Canvas and Web Audio, with seeds you can share.">
           <p class="title"><a href="https://github.com/Prit36/Sonograph">Sonograph</a> <span class="stack mono">JS</span></p>
           <p class="desc">205 mathematical patterns you can watch and hear. <a class="live mono" href="https://prit36.github.io/Sonograph/">live</a></p>
           <div class="track" aria-hidden="true"></div>
         </li>
-        <li class="work grid" data-project="bounce">
+        <li class="work grid" data-project="bounce"
+            data-detail="Runs the original Nokia Bounce JAR in a browser through a J2ME runtime. You bring the game file, and it never leaves your machine.">
           <p class="title"><a href="https://github.com/Prit36/Bounce">Bounce</a> <span class="stack mono">JS</span></p>
           <p class="desc">The original Nokia Bounce, running in a browser.</p>
           <div class="track" aria-hidden="true"></div>
         </li>
-        <li class="work grid" data-project="whistle">
+        <li class="work grid" data-project="whistle"
+            data-detail="Transcribes audio files or the microphone entirely offline. A native Rust app that needs no internet, Python or API key.">
           <p class="title"><a href="https://github.com/Prit36/whistle-desktop">Whistle</a> <span class="stack mono">Rust</span></p>
           <p class="desc">Offline speech to text. No internet, no API key.</p>
           <div class="track" aria-hidden="true"></div>
         </li>
-        <li class="work grid" data-project="quarry">
+        <li class="work grid" data-project="quarry"
+            data-detail="Scans a drive by reading the NTFS Master File Table directly, then shows it as a tree, a file list and a treemap. Native Go, drawn with Direct3D.">
           <p class="title"><a href="https://github.com/Prit36/quarry-disk-analyzer">Quarry</a> <span class="stack mono">Go</span></p>
           <p class="desc">Disk space analyzer that reads the NTFS MFT directly.</p>
           <div class="track" aria-hidden="true"></div>
         </li>
-        <li class="work grid" data-project="nanoui">
+        <li class="work grid" data-project="nanoui"
+            data-detail="A pull request to a Zig GPU UI toolkit. Windows text now uses DirectWrite, so it looks the same as in native apps.">
           <p class="title"><a href="https://github.com/justrach/nanoui/pull/22">nanoui</a> <span class="stack mono">Zig, PR</span></p>
           <p class="desc">Native font rendering on Windows for a Zig UI toolkit.</p>
           <div class="track" aria-hidden="true"></div>
@@ -111,7 +122,7 @@
     </section>
 
     <footer class="foot grid mono">
-      <p class="source">Public GitHub activity, updated <span id="updated">25 Oct 2026</span>. Times in IST.</p>
+      <p class="source">Timeline from public GitHub activity, updated <span id="updated">25 Oct 2026</span>. Times in IST.</p>
       <p class="hint">Hover a project or a day.</p>
     </footer>
   </main>
