@@ -112,6 +112,22 @@ ul, ol { list-style: none; }
 }
 .intro em { color: var(--ink); }
 
+/* Hovering this phrase zooms the score out to the day job */
+.day-job {
+  color: var(--ink);
+  cursor: default;
+  text-decoration: underline dotted;
+  text-decoration-thickness: 1px;
+  text-decoration-color: var(--ink-3);
+  text-underline-offset: 0.24em;
+  transition: text-decoration-color 0.15s;
+}
+.day-job:hover,
+.day-job[aria-expanded="true"] {
+  text-decoration-style: solid;
+  text-decoration-color: var(--accent);
+}
+
 .contact {
   grid-column: 9 / 13;
   line-height: 1.8;
@@ -198,8 +214,22 @@ ul, ol { list-style: none; }
   margin-top: 6px;
   color: var(--ink-3);
 }
-.axis span { position: absolute; top: 0; padding-left: 5px; white-space: nowrap; }
+.axis span { position: absolute; top: 0; padding-left: 5px; white-space: nowrap; transition: opacity 0.3s; }
 .axis .now { padding-left: 0; transform: translateX(-50%); color: var(--ink-2); }
+
+/* Zoomed out to years: the months squeeze into the right-hand corner */
+.zoom {
+  position: absolute;
+  inset: 0;
+  transform-origin: right;
+  transition: transform 0.8s cubic-bezier(0.65, 0, 0.25, 1);
+}
+.is-career .zoom { transform: scaleX(var(--k)); }
+.years { position: absolute; inset: 0; opacity: 0; transition: opacity 0.4s; }
+.is-career .years { opacity: 1; transition-delay: 0.3s; }
+.axis .yr { opacity: 0; }
+.is-career .axis span:not(.yr) { opacity: 0; }
+.is-career .axis .yr { opacity: 1; transition-delay: 0.3s; }
 
 /* Marks shared by the timeline and the tracks */
 
@@ -249,15 +279,72 @@ ul, ol { list-style: none; }
   opacity: 0.45;
 }
 
-/* Works */
+/* Works, and the day job in the same place */
 
-.works { padding-top: clamp(6px, 1.4vh, 14px); }
+.lists { display: grid; }
+.lists > ol { grid-area: 1 / 1; }
 
-.work {
+.works, .career { padding-top: clamp(6px, 1.4vh, 14px); }
+.works { transition: opacity 0.3s; }
+.is-career .works { opacity: 0; pointer-events: none; }
+
+.work, .job {
   min-height: var(--row);
   align-items: center;
   transition: opacity 0.15s;
 }
+
+.career { visibility: hidden; transition: visibility 0s 0.3s; }
+.is-career .career { visibility: visible; transition-delay: 0s; }
+
+.job {
+  min-height: calc(var(--row) * 1.5);
+  opacity: 0;
+  transform: translateY(6px);
+  transition: opacity 0.2s, transform 0.2s;
+}
+.is-career .job {
+  opacity: 1;
+  transform: none;
+  transition: opacity 0.35s, transform 0.35s;
+  transition-delay: calc(0.25s + var(--i) * 0.07s);
+}
+.is-career .has-focus .job { transition-delay: 0s; }
+.is-career .has-focus .job:not(.is-on) { opacity: 0.3; }
+
+.when { margin-left: 0.6em; color: var(--ink-3); font-size: calc(var(--small) * 0.94); white-space: nowrap; }
+
+/* A role is a bar on the year staff. It draws itself in from its start date. */
+.span {
+  position: absolute;
+  top: calc(50% - 1.5px);
+  height: 3px;
+  left: calc(var(--x) * 100%);
+  width: calc(var(--w) * 100%);
+  border-radius: 2px;
+  background: var(--ink);
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 0.2s, background-color 0.15s;
+}
+.span::before, .span::after {
+  content: "";
+  position: absolute;
+  top: -3px;
+  width: 1px;
+  height: 9px;
+  background: inherit;
+}
+.span::before { left: 0; }
+.span::after { right: 0; }
+.span.open::after { display: none; }
+.is-career .span {
+  transform: none;
+  transition: transform 0.7s cubic-bezier(0.2, 0.7, 0.2, 1), background-color 0.15s;
+  transition-delay: calc(0.45s + var(--i) * 0.12s), 0s;
+}
+.is-career .has-focus .span { transition-delay: 0s; }
+.job.is-on .span { background: var(--accent); }
 
 .title {
   grid-column: 1 / 4;

@@ -21,7 +21,8 @@
     <header class="top grid">
       <h1 class="name">Prit<br>Prajapati</h1>
       <p class="intro">
-        Full-stack developer by day. In the evenings and on weekends I write
+        <span class="day-job" id="day-job" tabindex="0" role="button" aria-expanded="false"
+              aria-controls="career">Full-stack developer by day</span>. In the evenings and on weekends I write
         software that runs on <em>your own machine</em>: fast native tools for
         Windows, and browser apps that never upload your files.
       </p>
@@ -46,6 +47,7 @@
         </div>
       </div>
 
+      <div class="lists">
       <ol class="works">
         <li class="work grid" data-project="fuelmate"
             data-detail="A Kotlin app for logging fuel fill-ups and keeping track of each vehicle's mileage.">
@@ -120,6 +122,36 @@
           <div class="track" aria-hidden="true"></div>
         </li>
       </ol>
+
+      <!-- Shown while "Full-stack developer by day" is hovered. From LinkedIn. -->
+      <ol class="career" id="career" aria-label="Work experience"
+          data-note="The day job: full-stack work in Surat since 2023, now as a senior engineer at Opash Software. Point at a role.">
+        <li class="job grid" data-from="2023-02" data-to="2023-05"
+            data-detail="An on-site internship at Unicorn Infosystem in Surat. February to May 2023, 4 months.">
+          <p class="title">Intern</p>
+          <p class="desc">Unicorn Infosystem <span class="when mono">Feb&ndash;May 2023</span></p>
+          <div class="track" aria-hidden="true"></div>
+        </li>
+        <li class="job grid" data-from="2023-06" data-to="2023-12"
+            data-detail="Joined Opash Software as a software engineering trainee, on an apprenticeship. June to December 2023, 7 months.">
+          <p class="title">Software Engineering Trainee</p>
+          <p class="desc">Opash Software <span class="when mono">Jun&ndash;Dec 2023</span></p>
+          <div class="track" aria-hidden="true"></div>
+        </li>
+        <li class="job grid" data-from="2024-01" data-to="2025-01"
+            data-detail="Software Engineer at Opash Software, full-time. January 2024 to January 2025, 1 year 1 month.">
+          <p class="title">Software Engineer</p>
+          <p class="desc">Opash Software <span class="when mono">Jan 2024&ndash;Jan 2025</span></p>
+          <div class="track" aria-hidden="true"></div>
+        </li>
+        <li class="job grid" data-from="2026-01" data-to=""
+            data-detail="Senior Software Engineer at Opash Software, full-time and on-site in Surat. Since January 2026.">
+          <p class="title">Senior Software Engineer</p>
+          <p class="desc">Opash Software <span class="when mono">Jan 2026&ndash;now</span></p>
+          <div class="track" aria-hidden="true"></div>
+        </li>
+      </ol>
+      </div>
     </section>
 
     <footer class="foot grid mono">

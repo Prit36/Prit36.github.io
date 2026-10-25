@@ -103,13 +103,20 @@
   score.style.setProperty("--n", n);
   score.style.setProperty("--ph", 0);
 
-  const mark = (className, i, vars = {}) => {
+  const markAt = (className, x, vars = {}) => {
     const e = document.createElement("span");
     e.className = className;
-    e.style.setProperty("--x", i / n);
+    e.style.setProperty("--x", x);
     for (const [k, v] of Object.entries(vars)) e.style.setProperty(k, v);
     return e;
   };
+  const mark = (className, i, vars) => markAt(className, i / n, vars);
+
+  // Everything drawn in the timeline sits in one layer, so it can be squeezed
+  // into the corner when the view zooms out to years.
+  const zoom = document.createElement("div");
+  zoom.className = "zoom";
+  wave.append(zoom);
 
   // Month lines, today and the playhead go into the timeline and every track,
   // so they read as one line running down the page.
@@ -123,21 +130,22 @@
   score.classList.add("drawing");
   setTimeout(() => score.classList.remove("drawing"), 2000);
 
-  staff(wave);
+  staff(zoom);
   const bars = [];
   for (let i = 0; i <= today && i < n; i++) {
     bars[i] = mark(totals[i] ? "d" : "d zero", i, { "--v": totals[i] / maxDay });
-    wave.append(bars[i]);
+    zoom.append(bars[i]);
   }
 
-  const label = (text, i, className = "") => {
+  const labelAt = (text, x, className = "") => {
     const s = document.createElement("span");
     s.className = className;
     s.textContent = text;
-    s.style.left = `${(i / n) * 100}%`;
+    s.style.left = `${x * 100}%`;
     axis.append(s);
     return s;
   };
+  const label = (text, i, className) => labelAt(text, i / n, className);
   const monthLabels = months.map((i) => label(MONTHS[dateOf(i).getUTCMonth()], i));
   const nowLabel = label("today", today + 0.5, "now");
 
@@ -256,7 +264,7 @@
     r.active.forEach((i) => {
       if (i > today) return;
       const e = mark("d hl", i, { "--v": r.counts[i] / maxDay });
-      wave.append(e);
+      zoom.append(e);
       lit.push(e);
     });
     const built = r.active.length ? ` Built ${span(r.active[0], r.active.at(-1))}.` : "";
@@ -441,46 +449,153 @@
 
   const toggle = () => (playing ? stop() : play());
   playBtn.addEventListener("click", toggle);
+
+  // The day job. Pointing at "Full-stack developer by day" zooms the score out
+  // from months to years: the side projects squeeze into the corner they take
+  // up, and the jobs before them appear on the same staff.
+
+  const careerEl = document.getElementById("career");
+  const dayJob = document.getElementById("day-job");
+  const careerNote = careerEl.dataset.note;
+  const careerStart = Date.UTC(2023, 0, 1);
+  const careerDays = Math.round((parse(data.to) - careerStart) / DAY) + 1;
+  const cx = (t) => (t - careerStart) / DAY / careerDays;
+  const nowT = parse(data.updated);
+  const month = (s, end = false) => Date.UTC(+s.slice(0, 4), +s.slice(5, 7) - (end ? 0 : 1), 1) - (end ? DAY : 0);
+  const newYears = [2024, 2025, 2026].map((y) => Date.UTC(y, 0, 1)).filter((t) => t <= parse(data.to));
+  const FAR = -1e6; // roll positions for career views, all earlier than any project day
+
+  score.style.setProperty("--k", n / careerDays);
+  careerEl.style.setProperty("--n", careerDays);
+
+  const years = document.createElement("div");
+  years.className = "years";
+  newYears.forEach((t) => years.append(markAt("m", cx(t))));
+  wave.append(years);
+  [careerStart, ...newYears].forEach((t) => labelAt(String(new Date(t).getUTCFullYear()), cx(t), "yr"));
+
+  const jobs = [...careerEl.querySelectorAll(".job")].map((el, k) => {
+    const a = month(el.dataset.from);
+    const b = el.dataset.to ? month(el.dataset.to, true) : nowT;
+    const track = el.querySelector(".track");
+    newYears.forEach((t) => track.append(markAt("m", cx(t))));
+    track.append(markAt("now-line", cx(nowT)));
+    track.append(markAt(el.dataset.to ? "span" : "span open", cx(a), { "--w": cx(b + DAY) - cx(a) }));
+    el.style.setProperty("--i", k);
+    const d = new Date(a);
+    return { el, pos: FAR + 1 + (a - careerStart) / DAY, label: `${MONTHS[d.getUTCMonth()]} ${d.getUTCFullYear()}` };
+  });
+
+  let career = false;
+  let leaveTimer = 0;
+
+  const careerOverview = () => {
+    careerEl.classList.remove("has-focus");
+    jobs.forEach((j) => j.el.classList.remove("is-on"));
+    show(careerNote);
+    roll(String(new Date(careerStart).getUTCFullYear()), FAR);
+  };
+
+  const enterCareer = () => {
+    clearTimeout(leaveTimer);
+    if (career) return;
+    stop();
+    reset();
+    career = true;
+    score.classList.add("is-career");
+    dayJob.setAttribute("aria-expanded", "true");
+    careerOverview();
+  };
+
+  const leaveCareer = () => {
+    clearTimeout(leaveTimer);
+    if (!career) return;
+    career = false;
+    score.classList.remove("is-career");
+    careerEl.classList.remove("has-focus");
+    jobs.forEach((j) => j.el.classList.remove("is-on"));
+    dayJob.setAttribute("aria-expanded", "false");
+    reset();
+  };
+
+  // A short grace period lets the mouse travel from the phrase down to the list.
+  const leaveSoon = () => {
+    clearTimeout(leaveTimer);
+    leaveTimer = setTimeout(leaveCareer, 400);
+  };
+
+  const isMouse = (e) => e.pointerType === "mouse" || e.pointerType === "pen";
+  let lastPointer = "";
+  dayJob.addEventListener("pointerenter", (e) => { if (isMouse(e)) enterCareer(); });
+  dayJob.addEventListener("pointerleave", (e) => { if (isMouse(e) && career) leaveSoon(); });
+  dayJob.addEventListener("pointerdown", (e) => { lastPointer = e.pointerType; });
+  dayJob.addEventListener("click", () => {
+    // A mouse already opened it on hover; touch and keyboard toggle it.
+    if (lastPointer !== "mouse") (career ? leaveCareer : enterCareer)();
+    lastPointer = "";
+  });
+  dayJob.addEventListener("focus", () => { if (lastPointer === "") enterCareer(); });
+  dayJob.addEventListener("blur", () => { if (career) leaveSoon(); });
+  score.addEventListener("pointerenter", () => { if (career) clearTimeout(leaveTimer); });
+  score.addEventListener("pointerleave", (e) => { if (isMouse(e) && career) leaveSoon(); });
+  document.addEventListener("pointerdown", (e) => {
+    if (career && !dayJob.contains(e.target) && !careerEl.contains(e.target)) leaveCareer();
+  });
+
+  careerEl.addEventListener("pointerover", (e) => {
+    const j = jobs.find((x) => x.el === e.target.closest(".job"));
+    if (!career || !j || j.el.classList.contains("is-on")) return;
+    careerEl.classList.add("has-focus");
+    jobs.forEach((x) => x.el.classList.toggle("is-on", x === j));
+    show(j.el.dataset.detail);
+    roll(j.label, j.pos);
+  });
+  careerEl.addEventListener("pointerleave", () => { if (career) careerOverview(); });
+
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape" && playing) stop();
-    else if ((e.key === "p" || e.key === "P") && !e.ctrlKey && !e.metaKey && !e.altKey) toggle();
+    if (e.key === "Escape") { stop(); leaveCareer(); }
+    else if ((e.key === "p" || e.key === "P") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+      leaveCareer();
+      toggle();
+    }
   });
 
   // Hovering is ignored while the year plays, so moving the mouse doesn't cut it off.
 
   const list = document.querySelector(".works");
   list.addEventListener("pointerover", (e) => {
-    if (playing) return;
+    if (playing || career) return;
     const row = rows.find((r) => r.el === e.target.closest(".work"));
     if (row && !(score.classList.contains("is-row") && row.el.classList.contains("is-on"))) focusRow(row);
   });
-  list.addEventListener("pointerleave", () => { if (!playing) reset(); });
+  list.addEventListener("pointerleave", () => { if (!playing && !career) reset(); });
   list.addEventListener("focusin", (e) => {
-    if (playing) return;
+    if (playing || career) return;
     const row = rows.find((r) => r.el === e.target.closest(".work"));
     if (row) focusRow(row);
   });
-  list.addEventListener("focusout", (e) => { if (!playing && !list.contains(e.relatedTarget)) reset(); });
+  list.addEventListener("focusout", (e) => { if (!playing && !career && !list.contains(e.relatedTarget)) reset(); });
 
   const dayAt = (e) => {
     const box = wave.getBoundingClientRect();
     return Math.floor(((e.clientX - box.left) / box.width) * n);
   };
-  timeline.addEventListener("pointermove", (e) => { if (!playing) scrubTo(dayAt(e)); });
+  timeline.addEventListener("pointermove", (e) => { if (!playing && !career) scrubTo(dayAt(e)); });
   timeline.addEventListener("pointerdown", (e) => {
+    if (career) return;
     stop();
     scrubTo(dayAt(e));
   });
   timeline.addEventListener("pointerleave", (e) => {
-    if (!playing && e.pointerType !== "touch" && document.activeElement !== wave) reset();
+    if (!playing && !career && e.pointerType !== "touch" && document.activeElement !== wave) reset();
   });
   document.addEventListener("pointerdown", (e) => {
-    if (playBtn.contains(e.target) || timeline.contains(e.target)) return;
+    if (career || playBtn.contains(e.target) || timeline.contains(e.target)) return;
     if (playing) stop();
     else if (current >= 0) reset();
   });
 
-  wave.addEventListener("focus", () => { if (!playing) scrubTo(today); });
+  wave.addEventListener("focus", () => { leaveCareer(); if (!playing) scrubTo(today); });
   wave.addEventListener("blur", () => { if (!playing) reset(); });
   wave.addEventListener("keydown", (e) => {
     const step = e.shiftKey ? 7 : 1;
