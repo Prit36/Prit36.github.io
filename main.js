@@ -1,9 +1,20 @@
 (() => {
   const clock = document.getElementById("clock");
+  const doing = document.getElementById("doing");
   const clockFormat = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Kolkata", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+    timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   });
-  const setClock = () => { clock.textContent = clockFormat.format(new Date()); };
+  // A guess at what I'm doing right now, from the time in Surat.
+  const guess = (h, weekend) =>
+    h < 7 ? "probably asleep"
+      : h < 10 ? "morning chai"
+        : !weekend && h < 19 ? "at the day job"
+          : "side-project hours";
+  const setClock = () => {
+    const p = Object.fromEntries(clockFormat.formatToParts(new Date()).map((x) => [x.type, x.value]));
+    clock.textContent = `${p.hour}:${p.minute}`;
+    doing.textContent = guess(+p.hour, p.weekday === "Sat" || p.weekday === "Sun");
+  };
   setClock();
   setInterval(setClock, 10000);
 
@@ -30,6 +41,7 @@
   const wave = document.getElementById("wave");
   const axis = document.getElementById("axis");
   const noteEl = document.getElementById("note");
+  const playBtn = document.getElementById("play");
 
   const rows = [...document.querySelectorAll(".work")].map((el) => {
     const counts = new Array(n).fill(0);
@@ -68,6 +80,10 @@
     parent.append(mark("now-line", today));
     parent.append(mark("ph", 0));
   };
+
+  // The marks sweep in from the left once, on load.
+  score.classList.add("drawing");
+  setTimeout(() => score.classList.remove("drawing"), 2000);
 
   staff(wave);
   const bars = [];
@@ -158,7 +174,8 @@
     show(`${r.el.dataset.detail}${built}`);
   };
 
-  const scrubTo = (i) => {
+  // During playback a quiet day keeps the last line, so the text doesn't flicker.
+  const scrubTo = (i, playback = false) => {
     i = Math.max(0, Math.min(today, n - 1, i));
     clear();
     current = i;
@@ -175,36 +192,145 @@
       lit.push(r.ticks[i]);
     });
     const d = `${weekday.format(dateOf(i))}, ${dayMonth.format(dateOf(i))}`;
-    show(on.length ? `${d}: worked on ${and.format(on.map((r) => r.name))}.` : `${d}: nothing public.`);
+    if (on.length) show(`${d}: worked on ${and.format(on.map((r) => r.name))}.`);
+    else if (!playback) show(`${d}: nothing public.`);
   };
+
+  // Play the year: the playhead sweeps from July to today, and each project
+  // sounds a note on the days I worked on it. Every row has its own pitch on a
+  // pentatonic scale, rising down the list, so busy days land as chords.
+
+  const STEP = 0.075; // seconds per day
+  const SCALE = [0, 2, 4, 7, 9];
+  const pitch = (k) => 220 * 2 ** ((12 * Math.floor(k / 5) + SCALE[k % 5]) / 12);
+  const AudioCtx = window.AudioContext || window.webkitAudioContext;
+  let audio = null;
+  let playing = null;
+
+  const pluck = (out, freq, at, v) => {
+    const osc = audio.createOscillator();
+    const env = audio.createGain();
+    osc.type = "triangle";
+    osc.frequency.value = freq;
+    env.gain.setValueAtTime(0, at);
+    env.gain.linearRampToValueAtTime(0.04 + 0.1 * Math.sqrt(v), at + 0.006);
+    env.gain.exponentialRampToValueAtTime(0.0001, at + 1.1);
+    osc.connect(env).connect(out);
+    osc.start(at);
+    osc.stop(at + 1.15);
+  };
+
+  // notes -> lowpass -> master, with an echo four days long feeding back into itself
+  const chain = () => {
+    const master = audio.createGain();
+    const tone = audio.createBiquadFilter();
+    const echo = audio.createDelay();
+    const feedback = audio.createGain();
+    const wet = audio.createGain();
+    tone.type = "lowpass";
+    tone.frequency.value = 2200;
+    echo.delayTime.value = STEP * 4;
+    feedback.gain.value = 0.3;
+    wet.gain.value = 0.22;
+    tone.connect(master);
+    tone.connect(echo).connect(feedback).connect(echo);
+    echo.connect(wet).connect(master);
+    master.connect(audio.destination);
+    return { input: tone, master };
+  };
+
+  const stop = (finished = false) => {
+    if (!playing) return;
+    cancelAnimationFrame(playing.frame);
+    if (playing.sound) {
+      const { master } = playing.sound;
+      master.gain.setTargetAtTime(0, audio.currentTime, finished ? 0.4 : 0.03);
+      setTimeout(() => master.disconnect(), finished ? 3000 : 400);
+    }
+    playing = null;
+    playBtn.textContent = "Play the year";
+    playBtn.setAttribute("aria-pressed", "false");
+    reset();
+  };
+
+  const play = () => {
+    if (AudioCtx) {
+      audio ||= new AudioCtx();
+      audio.resume();
+    }
+    // Notes are scheduled on the audio clock; the picture follows the page clock,
+    // so it still runs if the browser keeps the sound off.
+    const t0 = performance.now() / 1000 + 0.12;
+    const sound = audio && chain();
+    if (sound) {
+      const a0 = audio.currentTime + 0.12;
+      rows.forEach((r, k) => r.active.forEach((i) => {
+        if (i <= today) pluck(sound.input, pitch(k), a0 + i * STEP, r.counts[i] / maxCell);
+      }));
+    }
+    playing = { sound, frame: 0 };
+    playBtn.textContent = "Stop";
+    playBtn.setAttribute("aria-pressed", "true");
+    reset();
+
+    let shown = -1;
+    const frame = () => {
+      const pos = (performance.now() / 1000 - t0) / STEP;
+      const i = Math.floor(pos);
+      if (i > today + 10) return stop(true);
+      if (i >= 0 && i !== shown && i <= today) {
+        shown = i;
+        scrubTo(i, true);
+      }
+      score.style.setProperty("--ph", Math.max(0, Math.min(pos, today)) / n);
+      playing.frame = requestAnimationFrame(frame);
+    };
+    playing.frame = requestAnimationFrame(frame);
+  };
+
+  const toggle = () => (playing ? stop() : play());
+  playBtn.addEventListener("click", toggle);
+  document.addEventListener("keydown", (e) => {
+    if (e.key === "Escape" && playing) stop();
+    else if ((e.key === "p" || e.key === "P") && !e.ctrlKey && !e.metaKey && !e.altKey) toggle();
+  });
+
+  // Hovering is ignored while the year plays, so moving the mouse doesn't cut it off.
 
   const list = document.querySelector(".works");
   list.addEventListener("pointerover", (e) => {
+    if (playing) return;
     const row = rows.find((r) => r.el === e.target.closest(".work"));
     if (row && !(score.classList.contains("is-row") && row.el.classList.contains("is-on"))) focusRow(row);
   });
-  list.addEventListener("pointerleave", reset);
+  list.addEventListener("pointerleave", () => { if (!playing) reset(); });
   list.addEventListener("focusin", (e) => {
+    if (playing) return;
     const row = rows.find((r) => r.el === e.target.closest(".work"));
     if (row) focusRow(row);
   });
-  list.addEventListener("focusout", (e) => { if (!list.contains(e.relatedTarget)) reset(); });
+  list.addEventListener("focusout", (e) => { if (!playing && !list.contains(e.relatedTarget)) reset(); });
 
   const dayAt = (e) => {
     const box = wave.getBoundingClientRect();
     return Math.floor(((e.clientX - box.left) / box.width) * n);
   };
-  timeline.addEventListener("pointermove", (e) => scrubTo(dayAt(e)));
-  timeline.addEventListener("pointerdown", (e) => scrubTo(dayAt(e)));
+  timeline.addEventListener("pointermove", (e) => { if (!playing) scrubTo(dayAt(e)); });
+  timeline.addEventListener("pointerdown", (e) => {
+    stop();
+    scrubTo(dayAt(e));
+  });
   timeline.addEventListener("pointerleave", (e) => {
-    if (e.pointerType !== "touch" && document.activeElement !== wave) reset();
+    if (!playing && e.pointerType !== "touch" && document.activeElement !== wave) reset();
   });
   document.addEventListener("pointerdown", (e) => {
-    if (current >= 0 && !timeline.contains(e.target)) reset();
+    if (playBtn.contains(e.target) || timeline.contains(e.target)) return;
+    if (playing) stop();
+    else if (current >= 0) reset();
   });
 
-  wave.addEventListener("focus", () => scrubTo(today));
-  wave.addEventListener("blur", reset);
+  wave.addEventListener("focus", () => { if (!playing) scrubTo(today); });
+  wave.addEventListener("blur", () => { if (!playing) reset(); });
   wave.addEventListener("keydown", (e) => {
     const step = e.shiftKey ? 7 : 1;
     const next = {
@@ -212,9 +338,25 @@
     }[e.key];
     if (next === undefined) return;
     e.preventDefault();
+    stop();
     scrubTo(next);
   });
 
   document.getElementById("updated").textContent = stamp.format(parse(data.updated));
   reset();
+
+  // For anyone who opens the console: the same year, three days per bar.
+  const BLOCKS = "▁▂▃▄▅▆▇█";
+  const bins = [];
+  for (let i = 0; i <= today; i += 3) bins.push(sum(totals.slice(i, Math.min(i + 3, today + 1))));
+  const peak = Math.max(...bins);
+  const spark = bins.map((b) => (b ? BLOCKS[Math.min(7, Math.floor((b / peak) * 8))] : " ")).join("");
+  console.log(
+    `%c${spark}%c\nJuly to today, three days per bar.\n\n`
+      + "Hand-written HTML, CSS and JS. No framework, no build step.\n"
+      + "Source: https://github.com/Prit36/Prit36.github.io\n"
+      + "Press P on the page to hear the year.",
+    "font: 18px/1 monospace; color: #6f7cff;",
+    "font: 12px/1.5 monospace;",
+  );
 })();

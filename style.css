@@ -117,6 +117,7 @@ ul, ol { list-style: none; }
   color: var(--ink-2);
   margin-top: -0.35em;
 }
+#doing:not(:empty)::before { content: " \00b7  "; }
 
 /* Summary and timeline */
 
@@ -284,8 +285,50 @@ ul, ol { list-style: none; }
 .hint { grid-column: 9 / 13; }
 
 @media (hover: none) {
-  .hint { display: none; }
+  .hover-only { display: none; }
 }
+
+.play {
+  padding: 0;
+  border: 0;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  color: var(--ink-2);
+  cursor: pointer;
+  text-decoration: underline;
+  text-decoration-thickness: 1px;
+  text-underline-offset: 0.2em;
+  text-decoration-color: var(--rule);
+  transition: text-decoration-color 0.15s, color 0.15s;
+}
+.play:hover { color: var(--ink); text-decoration-color: currentColor; }
+.play::before {
+  content: "";
+  display: inline-block;
+  width: 0.62em;
+  height: 0.72em;
+  margin-right: 0.55em;
+  background: var(--accent);
+  clip-path: polygon(0 0, 100% 50%, 0 100%);
+}
+.play[aria-pressed="true"]::before { width: 0.62em; height: 0.62em; clip-path: none; }
+
+/* On load the marks sweep in from the left, like the year being written */
+
+.drawing .d, .drawing .t {
+  animation: rise 0.6s cubic-bezier(0.2, 0.7, 0.2, 1) backwards;
+  animation-delay: calc(var(--x) * 1s);
+}
+.drawing .t { animation-delay: calc(var(--x) * 1s + 0.12s); }
+.drawing .s {
+  transform-origin: left;
+  animation: draw linear backwards;
+  animation-duration: calc(var(--w) * 1s + 0.01s);
+  animation-delay: calc(var(--x) * 1s + 0.12s);
+}
+@keyframes rise { from { transform: scaleY(0); } }
+@keyframes draw { from { transform: scaleX(0); } }
 
 /* Small laptops and tablets in landscape: give the text one more column */
 
@@ -308,7 +351,8 @@ ul, ol { list-style: none; }
   }
 
   .page { grid-template-rows: auto auto auto; }
-  .name, .intro, .contact, .note, .timeline, .title, .desc, .source { grid-column: 1 / -1; }
+  .name, .intro, .contact, .note, .timeline, .title, .desc, .source, .hint { grid-column: 1 / -1; }
+  .hint { margin-top: 10px; }
 
   .intro { margin-top: 20px; }
   .contact {
@@ -317,6 +361,8 @@ ul, ol { list-style: none; }
     grid-template-columns: 1fr 1fr;
     column-gap: var(--gap);
   }
+  #doing { display: block; }
+  #doing::before { content: none !important; }
 
   .score { margin-top: 36px; }
   .total { grid-column: 1 / -1; }
@@ -331,5 +377,5 @@ ul, ol { list-style: none; }
 }
 
 @media (prefers-reduced-motion: reduce) {
-  * { transition: none !important; }
+  * { transition: none !important; animation: none !important; }
 }
