@@ -14,9 +14,28 @@
     const p = Object.fromEntries(clockFormat.formatToParts(new Date()).map((x) => [x.type, x.value]));
     clock.textContent = `${p.hour}:${p.minute}`;
     doing.textContent = guess(+p.hour, p.weekday === "Sat" || p.weekday === "Sun");
+    presence.classList.toggle("awake", +p.hour >= 7);
   };
+  const presence = document.getElementById("presence");
   setClock();
   setInterval(setClock, 10000);
+
+  const copyBtn = document.getElementById("copy");
+  let copied = 0;
+  copyBtn.addEventListener("click", async () => {
+    try {
+      await navigator.clipboard.writeText(document.getElementById("email").textContent.trim());
+    } catch {
+      return;
+    }
+    copyBtn.classList.add("done");
+    copyBtn.setAttribute("aria-label", "Copied");
+    clearTimeout(copied);
+    copied = setTimeout(() => {
+      copyBtn.classList.remove("done");
+      copyBtn.setAttribute("aria-label", "Copy email address");
+    }, 1600);
+  });
 
   // The name thickens under the mouse, letter by letter, like ink pooling.
   const nameEl = document.querySelector(".name");
@@ -450,12 +469,13 @@
   const toggle = () => (playing ? stop() : play());
   playBtn.addEventListener("click", toggle);
 
-  // The day job. Pointing at "Full-stack developer by day" zooms the score out
-  // from months to years: the side projects squeeze into the corner they take
-  // up, and the jobs before them appear on the same staff.
+  // Experience. Pointing at the switch zooms the score out from months to
+  // years: the side projects squeeze into the corner they take up, and the
+  // jobs before them appear on the same staff. A click keeps it there.
 
   const careerEl = document.getElementById("career");
-  const dayJob = document.getElementById("day-job");
+  const projectsBtn = document.getElementById("mode-projects");
+  const careerBtn = document.getElementById("mode-career");
   const careerNote = careerEl.dataset.note;
   const careerStart = Date.UTC(2023, 0, 1);
   const careerDays = Math.round((parse(data.to) - careerStart) / DAY) + 1;
@@ -487,7 +507,13 @@
   });
 
   let career = false;
+  let pinned = false;
   let leaveTimer = 0;
+
+  const setPressed = () => {
+    careerBtn.setAttribute("aria-pressed", String(career));
+    projectsBtn.setAttribute("aria-pressed", String(!career));
+  };
 
   const careerOverview = () => {
     careerEl.classList.remove("has-focus");
@@ -503,43 +529,37 @@
     reset();
     career = true;
     score.classList.add("is-career");
-    dayJob.setAttribute("aria-expanded", "true");
+    setPressed();
     careerOverview();
   };
 
   const leaveCareer = () => {
     clearTimeout(leaveTimer);
+    pinned = false;
     if (!career) return;
     career = false;
     score.classList.remove("is-career");
     careerEl.classList.remove("has-focus");
     jobs.forEach((j) => j.el.classList.remove("is-on"));
-    dayJob.setAttribute("aria-expanded", "false");
+    setPressed();
     reset();
   };
 
-  // A short grace period lets the mouse travel from the phrase down to the list.
+  // A hovered preview closes shortly after the mouse leaves the section.
   const leaveSoon = () => {
     clearTimeout(leaveTimer);
     leaveTimer = setTimeout(leaveCareer, 400);
   };
 
   const isMouse = (e) => e.pointerType === "mouse" || e.pointerType === "pen";
-  let lastPointer = "";
-  dayJob.addEventListener("pointerenter", (e) => { if (isMouse(e)) enterCareer(); });
-  dayJob.addEventListener("pointerleave", (e) => { if (isMouse(e) && career) leaveSoon(); });
-  dayJob.addEventListener("pointerdown", (e) => { lastPointer = e.pointerType; });
-  dayJob.addEventListener("click", () => {
-    // A mouse already opened it on hover; touch and keyboard toggle it.
-    if (lastPointer !== "mouse") (career ? leaveCareer : enterCareer)();
-    lastPointer = "";
-  });
-  dayJob.addEventListener("focus", () => { if (lastPointer === "") enterCareer(); });
-  dayJob.addEventListener("blur", () => { if (career) leaveSoon(); });
+  careerBtn.addEventListener("pointerenter", (e) => { if (isMouse(e)) enterCareer(); });
+  projectsBtn.addEventListener("pointerenter", (e) => { if (isMouse(e) && !pinned) leaveCareer(); });
+  careerBtn.addEventListener("click", () => { enterCareer(); pinned = true; });
+  projectsBtn.addEventListener("click", leaveCareer);
   score.addEventListener("pointerenter", () => { if (career) clearTimeout(leaveTimer); });
-  score.addEventListener("pointerleave", (e) => { if (isMouse(e) && career) leaveSoon(); });
+  score.addEventListener("pointerleave", (e) => { if (isMouse(e) && career && !pinned) leaveSoon(); });
   document.addEventListener("pointerdown", (e) => {
-    if (career && !dayJob.contains(e.target) && !careerEl.contains(e.target)) leaveCareer();
+    if (career && !pinned && !score.contains(e.target)) leaveCareer();
   });
 
   careerEl.addEventListener("pointerover", (e) => {

@@ -112,29 +112,75 @@ ul, ol { list-style: none; }
 }
 .intro em { color: var(--ink); }
 
-/* Hovering this phrase zooms the score out to the day job */
-.day-job {
-  color: var(--ink);
-  cursor: default;
-  text-decoration: underline dotted;
-  text-decoration-thickness: 1px;
-  text-decoration-color: var(--ink-3);
-  text-underline-offset: 0.24em;
-  transition: text-decoration-color 0.15s;
-}
-.day-job:hover,
-.day-job[aria-expanded="true"] {
-  text-decoration-style: solid;
-  text-decoration-color: var(--accent);
-}
-
 .contact {
   grid-column: 9 / 13;
+  font-size: clamp(10.5px, min(1.7vh, 0.98vw), 13.5px);
   line-height: 1.8;
   color: var(--ink-2);
   margin-top: -0.35em;
 }
+.contact li { display: flex; align-items: center; gap: 0.7em; min-width: 0; }
+.contact a { color: var(--ink); }
 #doing:not(:empty)::before { content: " \00b7  "; }
+
+.ic {
+  flex: none;
+  width: 1.2em;
+  height: 1.2em;
+  fill: none;
+  stroke: var(--ink-3);
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.ic.solid { fill: currentColor; stroke: none; width: 1.1em; height: 1.1em; }
+
+/* A presence light: lit and breathing while it's daytime in Surat */
+.presence { display: grid; place-items: center; }
+.presence::before {
+  content: "";
+  width: 0.5em;
+  height: 0.5em;
+  border-radius: 50%;
+  background: var(--ink-3);
+}
+.presence.awake::before { background: var(--accent); animation: breathe 2.8s ease-out infinite; }
+@keyframes breathe {
+  0% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--accent) 45%, transparent); }
+  70%, 100% { box-shadow: 0 0 0 0.45em transparent; }
+}
+
+.copy {
+  display: grid;
+  margin-left: -0.2em;
+  padding: 0.15em;
+  border: 0;
+  border-radius: 3px;
+  background: none;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: color 0.15s;
+}
+.copy:hover { color: var(--ink); }
+.copy svg {
+  grid-area: 1 / 1;
+  width: 1.05em;
+  height: 1.05em;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.6;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+  transition: opacity 0.15s, transform 0.2s;
+}
+.copy .i-done { opacity: 0; transform: scale(0.6); stroke: var(--accent); stroke-width: 2; }
+.copy.done .i-copy { opacity: 0; transform: scale(0.6); }
+.copy.done .i-done { opacity: 1; transform: none; }
+
+.social { gap: 1.4em; }
+.social a { display: inline-flex; align-items: center; gap: 0.55em; }
+.social a .ic { color: var(--ink-2); transition: color 0.15s; }
+.social a:hover .ic { color: var(--ink); }
 
 /* Summary and timeline */
 
@@ -149,8 +195,31 @@ ul, ol { list-style: none; }
   border-bottom: 1px solid var(--rule);
 }
 
-.total {
+.head {
   grid-column: 1 / 4;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: clamp(10px, 2.4vh, 22px);
+}
+
+/* Side projects / Experience. Hovering Experience previews it, a click keeps it. */
+.modes { display: flex; gap: 1.5em; }
+.mode {
+  padding: 0 0 0.3em;
+  border: 0;
+  border-bottom: 1px solid transparent;
+  background: none;
+  font: inherit;
+  letter-spacing: inherit;
+  color: var(--ink-3);
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+.mode:hover { color: var(--ink); }
+.mode[aria-pressed="true"] { color: var(--ink); border-bottom-color: var(--accent); }
+
+.total {
   display: flex;
   font-size: var(--display);
   line-height: 0.75;
@@ -471,17 +540,10 @@ ul, ol { list-style: none; }
   .hint { margin-top: 10px; }
 
   .intro { margin-top: 20px; }
-  .contact {
-    margin-top: 18px;
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    column-gap: var(--gap);
-  }
-  #doing { display: block; }
-  #doing::before { content: none !important; }
+  .contact { margin-top: 18px; }
 
   .score { margin-top: 36px; }
-  .total { grid-column: 1 / -1; }
+  .head { grid-column: 1 / -1; }
   .note { grid-column: 1 / -1; height: auto; margin-top: 12px; }
   .timeline { margin-top: 22px; }
 
