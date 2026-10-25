@@ -1,4 +1,4 @@
-"""Rebuild data.js from GitHub.
+"""Rebuild data.js and the profile timeline images from GitHub.
 
 Needs the GitHub CLI (gh), signed in. Run from this folder:
 
@@ -55,6 +55,55 @@ def local_time(commit):
     return dt.datetime.fromisoformat(stamp).astimezone(TZ)
 
 
+# Timeline image for the GitHub profile README, one per GitHub theme.
+THEMES = {
+    "light": {"ink": "#1f2328", "muted": "#8c959f", "rule": "#d8dee4", "accent": "#2b3fe0"},
+    "dark": {"ink": "#e6edf3", "muted": "#6e7681", "rule": "#30363d", "accent": "#8f9cff"},
+}
+MONTHS = "Jan Feb Mar Apr May Jun Jul Aug Sep Oct Nov Dec".split()
+
+
+def timeline_svg(data, colors):
+    start = dt.date.fromisoformat(data["from"])
+    end = dt.date.fromisoformat(data["to"])
+    today = dt.date.fromisoformat(data["updated"])
+    days = [start + dt.timedelta(i) for i in range((end - start).days + 1)]
+    totals = Counter()
+    for counts in data["projects"].values():
+        totals.update(counts)
+    peak = max(totals.values())
+    active = sum(1 for c in totals.values() if c)
+    first = dt.date.fromisoformat(data["first"])
+
+    width, top, half = 880, 34, 30
+    mid = top + half
+    slot = width / len(days)
+    bar = max(1, round(slot * 0.6))
+    mono = "ui-monospace,SFMono-Regular,Menlo,Consolas,monospace"
+    parts = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="128" '
+        f'viewBox="0 0 {width} 128" font-family="{mono}" font-size="12">',
+        f'<text x="0" y="13" fill="{colors["muted"]}">{sum(totals.values())} commits on {active} days, '
+        f'since {first.day} {MONTHS[first.month - 1]} {first.year}</text>',
+    ]
+    for i, day in enumerate(days):
+        x = i * slot
+        if day.day == 1:
+            parts.append(f'<rect x="{x:.1f}" y="{top}" width="1" height="{half * 2 + 6}" fill="{colors["rule"]}"/>')
+            parts.append(f'<text x="{x + 5:.1f}" y="118" fill="{colors["muted"]}">{MONTHS[day.month - 1]}</text>')
+        if day > today:
+            continue
+        c = totals.get(day.isoformat(), 0)
+        h = max(2, c / peak * half * 2) if c else 1.5
+        fill = colors["ink"] if c else colors["rule"]
+        bx = x + (slot - bar) / 2
+        parts.append(f'<rect x="{bx:.1f}" y="{mid - h / 2:.1f}" width="{bar}" height="{h:.1f}" rx="1" fill="{fill}"/>')
+    nx = (today - start).days * slot + slot / 2
+    parts.append(f'<rect x="{nx:.1f}" y="{top}" width="1" height="{half * 2 + 6}" fill="{colors["accent"]}"/>')
+    parts.append("</svg>")
+    return "\n".join(parts) + "\n"
+
+
 def main():
     projects = {}
     times = []
@@ -91,7 +140,10 @@ def main():
         f"window.ACTIVITY = {body};\n",
         encoding="utf-8",
     )
-    print(f"{len(times)} commits, written to data.js")
+    for theme, colors in THEMES.items():
+        Path(__file__).with_name(f"timeline-{theme}.svg").write_text(
+            timeline_svg(data, colors), encoding="utf-8")
+    print(f"{len(times)} commits, written to data.js and timeline-*.svg")
 
 
 if __name__ == "__main__":
