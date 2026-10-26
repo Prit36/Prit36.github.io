@@ -132,7 +132,18 @@ ul, ol { list-style: none; }
   content: "";
   position: absolute;
   inset: 0;
-  background: linear-gradient(to bottom, transparent 64%, var(--bg));
+  /* Eased in and out (smoothstep), so the fade has no hard start or stop for
+     the eye to read as a band. */
+  background: linear-gradient(to bottom,
+    transparent 70%,
+    color-mix(in srgb, var(--bg) 4.3%, transparent) 73.75%,
+    color-mix(in srgb, var(--bg) 15.6%, transparent) 77.5%,
+    color-mix(in srgb, var(--bg) 31.6%, transparent) 81.25%,
+    color-mix(in srgb, var(--bg) 50%, transparent) 85%,
+    color-mix(in srgb, var(--bg) 68.4%, transparent) 88.75%,
+    color-mix(in srgb, var(--bg) 84.4%, transparent) 92.5%,
+    color-mix(in srgb, var(--bg) 95.7%, transparent) 96.25%,
+    var(--bg));
 }
 
 /* The painting keeps Surat's hours. --night and --gold come from the real
