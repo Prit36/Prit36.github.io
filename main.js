@@ -1,8 +1,509 @@
 (() => {
   const motion = matchMedia("(prefers-reduced-motion: reduce)");
   let reduced = motion.matches;
+
+  const make = (tag, className = "", text = "") => {
+    const e = document.createElement(tag);
+    e.className = className;
+    e.textContent = text;
+    return e;
+  };
+
+  // Lights. The page follows the system until the switch is flipped, and the
+  // new theme spreads out from the switch. Flipping back to what the system
+  // wants hands control back to the system.
+
+  const root = document.documentElement;
+  const lightsBtn = document.getElementById("lights");
+  const darkScheme = matchMedia("(prefers-color-scheme: dark)");
+  const themeMetas = [...document.querySelectorAll('meta[name="theme-color"]')].map((m) => [m, m.content]);
+  const isDark = () => (root.dataset.theme || (darkScheme.matches ? "dark" : "light")) === "dark";
+  const syncLights = () => {
+    const dark = isDark();
+    lightsBtn.classList.toggle("is-dark", dark);
+    lightsBtn.setAttribute("aria-label", dark ? "Turn the lights on" : "Turn the lights off");
+    const forced = root.dataset.theme;
+    themeMetas.forEach(([m, c]) => { m.content = forced ? (dark ? "#131312" : "#f4f3ef") : c; });
+  };
+  const setTheme = (dark, from = lightsBtn) => {
+    const apply = () => {
+      if (dark === darkScheme.matches) delete root.dataset.theme;
+      else root.dataset.theme = dark ? "dark" : "light";
+      try {
+        if (root.dataset.theme) localStorage.setItem("theme", root.dataset.theme);
+        else localStorage.removeItem("theme");
+      } catch {
+        // Private windows can refuse storage; the switch still works for this visit.
+      }
+      syncLights();
+    };
+    if (reduced || !document.startViewTransition || document.hidden) return apply();
+    const b = from.getBoundingClientRect();
+    const x = b.left + b.width / 2, y = b.top + b.height / 2;
+    const r = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
+    document.startViewTransition(apply).ready.then(() => {
+      root.animate({ clipPath: [`circle(0 at ${x}px ${y}px)`, `circle(${r}px at ${x}px ${y}px)`] },
+        { duration: 700, easing: "cubic-bezier(0.6, 0, 0.2, 1)", pseudoElement: "::view-transition-new(root)" });
+    }).catch(() => {});
+  };
+  const toggleTheme = (from) => setTheme(!isDark(), from);
+  lightsBtn.addEventListener("click", () => toggleTheme(lightsBtn));
+  darkScheme.addEventListener("change", syncLights);
+  syncLights();
+
+  // The painting keeps Surat's hours. The real height of the sun over Surat
+  // sets the light: gold near the horizon, then dusk, the stars, the moon in
+  // tonight's phase, lit windows and the lighthouse at work. The sun (or the
+  // moon) is in the sky too, and it can be picked up and dragged to another hour.
+
+  const landscape = document.querySelector(".landscape");
+  const bannerImg = landscape.querySelector("img");
+  const skyNote = document.getElementById("sky-note");
+  const sky = make("div", "sky");
+  sky.innerHTML = `
+    <div class="tint dusk"></div><div class="tint gold"></div><div class="tint ember"></div>
+    <div class="stars"></div>
+    <div class="windows"></div>
+    <canvas class="glow"></canvas>
+    <div class="orbs">
+      <span class="orb sun"></span>
+      <svg class="orb moon" viewBox="0 0 24 24"><circle cx="12" cy="12" r="10"/><path/></svg>
+    </div>
+    <span class="orb-ring"></span>
+    <span class="orb-tag mono"></span>`;
+  bannerImg.after(sky);
+  const sunEl = sky.querySelector(".sun");
+  const moonEl = sky.querySelector(".moon");
+  const orbsEl = sky.querySelector(".orbs");
+  const moonLit = moonEl.querySelector("path");
+  const ring = sky.querySelector(".orb-ring");
+  const tag = sky.querySelector(".orb-tag");
+  const glow = sky.querySelector(".glow");
+  const pen = glow.getContext("2d");
+
+  // The same stars every night, and the same glints on the water.
+  let seed = 36;
+  const rand = () => {
+    seed = (seed + 0x6d2b79f5) | 0;
+    let t = Math.imul(seed ^ (seed >>> 15), 1 | seed);
+    t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+    return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+  };
+  const stars = sky.querySelector(".stars");
+  for (let i = 0; i < 110; i++) {
+    const s = make("i", rand() < 0.1 ? "big" : "");
+    s.style.cssText = `left:${(rand() * 100).toFixed(2)}%;top:${(rand() * 96).toFixed(2)}%;`
+      + `--o:${(0.3 + rand() * 0.7).toFixed(2)};--d:${(1.8 + rand() * 4).toFixed(2)}s;animation-delay:${(-rand() * 6).toFixed(2)}s`;
+    stars.append(s);
+  }
+  const shooting = make("b", "shoot");
+  const aimShot = () => {
+    shooting.style.left = `${(5 + Math.random() * 70).toFixed(1)}%`;
+    shooting.style.top = `${(Math.random() * 35).toFixed(1)}%`;
+  };
+  aimShot();
+  shooting.addEventListener("animationiteration", aimShot);
+  stars.append(shooting);
+  const GLINTS = Array.from({ length: 360 }, () => ({
+    row: rand(), off: (rand() + rand() + rand() - 1.5) * 1.5, len: rand(), ph: rand() * 6.283, sp: 1.1 + rand() * 3.2,
+  }));
+
+  // Points in the 2172 × 724 painting: the lighthouse lamp, the horizon, the
+  // windows of the village on the right, and the far towns.
+  const PAINTING = [2172, 724];
+  const LAMP = [1164, 329];
+  const HORIZON = 374;
+  const WINDOWS = [
+    [2012, 281], [2038, 281], [2067, 281], [2012, 311], [2040, 311], [2017, 226],
+    [1850, 325], [1875, 325], [1905, 325], [1850, 355],
+    [1915, 361], [1950, 361], [1985, 361], [1945, 390],
+    [1650, 371], [1695, 376], [1356, 376], [1384, 381],
+  ];
+  const TOWNS = [[700, 352], [742, 349], [790, 347], [836, 345], [893, 348], [957, 354], [1560, 358], [1618, 362], [1460, 356]];
+  // The open sea, traced round the headland, the beach and the rocks, as
+  // fractions of the painting. Reflections stay inside it.
+  const SEA = [[0, 0.515], [0.465, 0.515], [0.465, 0.575], [0.5, 0.585], [0.74, 0.585], [0.8, 0.62],
+    [0.87, 0.67], [0.88, 0.72], [0.84, 0.78], [0.79, 0.82], [0.78, 1], [0, 1]];
+  // The skyline: the open horizon on the left, then the islands, the hills
+  // and the mountains behind the village. Stars, sun and moon stay above it.
+  const SKYLINE = [[0, 375], [95, 375], [105, 369], [118, 375], [140, 373], [160, 355], [175, 347], [195, 352],
+    [235, 372], [250, 366], [285, 362], [300, 356], [320, 364], [345, 350], [375, 343], [400, 326], [440, 315],
+    [470, 318], [520, 300], [575, 284], [610, 293], [638, 297], [665, 282], [710, 280], [798, 282], [847, 271],
+    [902, 242], [935, 244], [979, 235], [1023, 244], [1060, 236], [1100, 224], [1162, 214], [1218, 229],
+    [1291, 252], [1347, 246], [1397, 232], [1442, 246], [1498, 241], [1538, 224], [1582, 221], [1638, 224],
+    [1694, 213], [1779, 204], [1857, 183], [1902, 176], [1947, 187], [1990, 193], [2003, 178], [2012, 192],
+    [2050, 196], [2095, 190], [2112, 138], [2128, 190], [2140, 165], [2150, 195], [2172, 176]];
+  // The sun and moon set into the open sea on the left and rise from behind
+  // the hills, along this stretch of the painting.
+  const ARC = [70, 820];
+  const windowsEl = sky.querySelector(".windows");
+  const lights = [...WINDOWS, ...TOWNS].map((p, i) => {
+    const e = make("i", i >= WINDOWS.length ? "far" : "");
+    e.style.setProperty("--t", `${(-rand() * 11).toFixed(2)}s`);
+    windowsEl.append(e);
+    return [e, p];
+  });
+
+  // Where a point of the painting lands, given object-fit: cover.
+  let geo = null, sea = null, ridge = null, skyState = null;
+  const at = ([x, y]) => [geo.ox + x * geo.s, geo.oy + y * geo.s];
+  const placeSky = () => {
+    const W = landscape.clientWidth, H = landscape.clientHeight;
+    if (!W || !H) return;
+    const s = Math.max(W / PAINTING[0], H / PAINTING[1]);
+    const [fx, fy] = getComputedStyle(bannerImg).objectPosition.split(" ").map((v) => parseFloat(v) / 100);
+    const ox = (W - PAINTING[0] * s) * fx, oy = (H - PAINTING[1] * s) * fy;
+    const horizon = Math.max(0, oy + HORIZON * s);
+    const dpr = Math.min(window.devicePixelRatio || 1, 2);
+    const orb = Math.round(Math.max(12, Math.min(34, horizon * 0.34)));
+    geo = { W, H, s, ox, oy, horizon, dpr, orb };
+    glow.width = Math.round(W * dpr);
+    glow.height = Math.round(H * dpr);
+    landscape.style.setProperty("--s", s.toFixed(4));
+    landscape.style.setProperty("--horizon", `${horizon.toFixed(1)}px`);
+    landscape.style.setProperty("--orb", `${orb}px`);
+    sea = new Path2D();
+    SEA.forEach(([u, v], i) => {
+      const [x, y] = at([u * PAINTING[0], v * PAINTING[1]]);
+      if (i) sea.lineTo(x, y); else sea.moveTo(x, y);
+    });
+    sea.closePath();
+    ridge = SKYLINE.map(at);
+    const above = `path("M${ridge.map(([x, y]) => `${x.toFixed(1)} ${y.toFixed(1)}`).join("L")}`
+      + `L${ridge.at(-1)[0].toFixed(1)} -99L${ridge[0][0].toFixed(1)} -99Z")`;
+    orbsEl.style.clipPath = stars.style.clipPath = above;
+    lights.forEach(([e, p]) => {
+      const [x, y] = at(p);
+      e.style.left = `${x.toFixed(1)}px`;
+      e.style.top = `${y.toFixed(1)}px`;
+    });
+    if (skyState) layoutSky();
+  };
+  const skyObserver = new ResizeObserver(placeSky);
+  skyObserver.observe(landscape);
+
+  // The sun over Surat: its altitude, and its hour angle (0 at solar noon),
+  // both in degrees. Close enough to light a painting.
+  const RAD = Math.PI / 180;
+  const SURAT = { lat: 21.17 * RAD, lon: 72.83 };
+  const sunAt = (t) => {
+    const n = (t - Date.UTC(new Date(t).getUTCFullYear(), 0, 0)) / 864e5;
+    const decl = -23.44 * RAD * Math.cos((2 * Math.PI / 365) * (n + 10));
+    const b = (2 * Math.PI * (n - 81)) / 364;
+    const eot = 9.87 * Math.sin(2 * b) - 7.53 * Math.cos(b) - 1.5 * Math.sin(b);
+    const solar = ((t / 6e4) % 1440) + SURAT.lon * 4 + eot;
+    const hour = solar / 4 - 180;
+    const alt = Math.asin(Math.sin(SURAT.lat) * Math.sin(decl)
+      + Math.cos(SURAT.lat) * Math.cos(decl) * Math.cos(hour * RAD)) / RAD;
+    return { alt, hour: ((((hour + 180) % 360) + 360) % 360) - 180 };
+  };
+  // The moon keeps the opposite side of the sky, the way a full one does.
+  const moonOf = ({ alt, hour }) => ({ alt: -alt, hour: ((hour + 360) % 360) - 180 });
+  // 0 is a new moon, 0.5 a full one.
+  const phaseAt = (t) => ((((t - Date.UTC(2000, 0, 6, 18, 14)) / 864e5 / 29.530588853) % 1) + 1) % 1;
+  const PHASES = ["new moon", "waxing crescent", "first quarter", "waxing gibbous",
+    "full moon", "waning gibbous", "last quarter", "waning crescent"];
+  // The lit limb is a half circle; the terminator is half an ellipse.
+  const moonPath = (p) => {
+    const k = Math.cos(2 * Math.PI * p);
+    const waxing = p < 0.5;
+    return `M12 2A10 10 0 0 ${waxing ? 1 : 0} 12 22A${(Math.abs(k) * 10).toFixed(2)} 10 0 0 ${(k > 0) !== waxing ? 1 : 0} 12 2Z`;
+  };
+  const smooth = (a, b, x) => {
+    const k = Math.min(1, Math.max(0, (x - a) / (b - a)));
+    return k * k * (3 - 2 * k);
+  };
+  const mix = (a, b, k) => a.map((v, i) => Math.round(v + (b[i] - v) * k));
+
+  // Where the sun or moon sits in the banner. It rises from behind the hills
+  // in the morning and sets into the open sea on the left in the evening.
+  // Its height is measured from the sea horizon, so the hills hide it while
+  // it is low over them; at its highest it stays just inside the banner.
+  // A wide, short banner shows only a strip of sky over the left of the
+  // painting, so there the arc closes in to where the hills leave room for
+  // the whole body.
+  const arcEnds = () => {
+    const open = ridge.find(([, y]) => y < geo.orb * 1.1);
+    const rise = Math.min(geo.ox + ARC[1] * geo.s, open ? open[0] + geo.orb * 2 : Infinity);
+    return [Math.max(geo.ox + ARC[0] * geo.s, geo.orb * 1.2), rise];
+  };
+  const bodySpan = () => { const [a, b] = arcEnds(); return (b - a) / 2; };
+  const bodyAt = ({ hour, alt }) => {
+    const [a, b] = arcEnds();
+    const top = Math.max(geo.oy + 70 * geo.s, geo.orb * 0.95);
+    const k = alt >= 0 ? Math.sin((Math.min(1, alt / 50) * Math.PI) / 2) : alt / 12;
+    return [(a + b) / 2 - (hour / 95) * (b - a) / 2, geo.horizon - k * Math.max(0, geo.horizon - top)];
+  };
+  // The height of the skyline at x, and how much of a body at (x, y) shows
+  // above it.
+  const ridgeAt = (x) => {
+    let i = 1;
+    while (i < ridge.length - 1 && ridge[i][0] < x) i++;
+    const [[x0, y0], [x1, y1]] = [ridge[i - 1], ridge[i]];
+    return y0 + (y1 - y0) * Math.min(1, Math.max(0, (x - x0) / (x1 - x0)));
+  };
+  const shows = ([x, y]) => smooth(geo.orb * 0.45, -geo.orb * 0.45, y - ridgeAt(x));
+
+  const paintSky = (t) => {
+    const sun = sunAt(t);
+    const { alt } = sun;
+    const night = smooth(4, -9, alt);
+    const gold = Math.exp(-(((alt - 2.5) / 6.5) ** 2));
+    const phase = phaseAt(t);
+    landscape.style.setProperty("--night", night.toFixed(3));
+    landscape.style.setProperty("--gold", gold.toFixed(3));
+    landscape.classList.toggle("is-night", night > 0.02);
+    moonLit.setAttribute("d", moonPath(phase));
+    skyState = {
+      t, sun, night, gold, phase,
+      lit: (1 - Math.cos(2 * Math.PI * phase)) / 2,
+      isSun: alt > -1,
+      sunVis: smooth(-3, 1, alt),
+      moonVis: smooth(1, -5, alt),
+    };
+    if (geo) layoutSky();
+    const said = `sun ${alt < 0 ? "−" : ""}${Math.abs(Math.round(alt))}°`;
+    return night > 0.4 ? `${said} · ${PHASES[Math.round(phase * 8) % 8]}` : said;
+  };
+
+  const layoutSky = () => {
+    const st = skyState;
+    st.sunAt = bodyAt(st.sun);
+    st.moonAt = bodyAt(moonOf(st.sun));
+    const [r, g, b] = mix([255, 238, 190], [255, 140, 60], st.gold);
+    sunEl.style.setProperty("--sun", `rgb(${r} ${g} ${b})`);
+    sunEl.style.setProperty("--sun-halo", `rgb(${r} ${g} ${b} / ${(0.35 + 0.3 * st.gold).toFixed(2)})`);
+    sunEl.style.transform = `translate(${st.sunAt[0].toFixed(1)}px, ${st.sunAt[1].toFixed(1)}px)`;
+    sunEl.style.opacity = st.sunVis.toFixed(3);
+    moonEl.style.transform = `translate(${st.moonAt[0].toFixed(1)}px, ${st.moonAt[1].toFixed(1)}px)`;
+    moonEl.style.opacity = st.moonVis.toFixed(3);
+
+    // The ring and the label follow whichever one is up.
+    const [x, y] = st.isSun ? st.sunAt : st.moonAt;
+    ring.style.transform = `translate(${x.toFixed(1)}px, ${y.toFixed(1)}px)`;
+    const side = x > geo.W * 0.62 ? `calc(${(x - geo.orb).toFixed(1)}px - 100%)` : `${(x + geo.orb).toFixed(1)}px`;
+    tag.style.transform = `translate(${side}, calc(${Math.max(y, geo.orb * 0.6).toFixed(1)}px - 50%))`;
+
+    // Its path through this part of the day, dotted: done in faint dots,
+    // still to come in bright ones.
+    const past = new Path2D(), ahead = new Path2D();
+    for (let m = -12 * 60; m <= 12 * 60; m += 9) {
+      const p = sunAt(st.t + m * 6e4);
+      const q = st.isSun ? p : moonOf(p);
+      if (q.alt < -0.5) continue;
+      const [px, py] = bodyAt(q);
+      if (Math.hypot(px - x, py - y) < geo.orb * 0.85) continue;
+      const path = m < 0 ? past : ahead;
+      path.moveTo(px + 1.1, py);
+      path.arc(px, py, 1.1, 0, 2 * Math.PI);
+    }
+    st.path = [past, ahead];
+    wakeSky();
+  };
+
+  // Light on the water: a path from the horizon straight down to you under
+  // the sun or moon, narrow where it meets the horizon and wider close by,
+  // made of a soft glow and glints that flicker on the swell. The higher the
+  // body, the wider and the more its light gathers near you.
+  const glints = (bx, alt, rgb, strength, time) => {
+    const { H, horizon, orb, s } = geo;
+    const depth = H - horizon;
+    if (depth < 2) return;
+    const high = Math.sin(Math.min(80, Math.max(0, alt)) * RAD);
+    const w0 = orb * (0.22 + 0.35 * high), w1 = orb * (0.9 + 1.8 * high);
+    const rows = 18;
+    for (let i = 0; i < rows; i++) {
+      const d = i / rows, w = w0 + (w1 - w0) * d;
+      const a = 0.3 * strength * (1 - 0.75 * high * (1 - d)) * (1 - 0.35 * d);
+      const band = pen.createLinearGradient(bx - w, 0, bx + w, 0);
+      band.addColorStop(0, `rgba(${rgb},0)`);
+      band.addColorStop(0.5, `rgba(${rgb},${Math.min(0.5, a).toFixed(3)})`);
+      band.addColorStop(1, `rgba(${rgb},0)`);
+      pen.fillStyle = band;
+      pen.fillRect(bx - w, horizon + d * depth, w * 2, depth / rows + 0.5);
+    }
+    // Where the path meets the horizon, a low body burns brightest.
+    const spot = orb * 0.9;
+    pen.save();
+    pen.translate(bx, horizon);
+    pen.scale(1, 0.3);
+    const meet = pen.createRadialGradient(0, 0, 0, 0, 0, spot);
+    meet.addColorStop(0, `rgba(${rgb},${(0.7 * strength * (1 - high)).toFixed(3)})`);
+    meet.addColorStop(1, `rgba(${rgb},0)`);
+    pen.fillStyle = meet;
+    pen.fillRect(-spot, -spot, spot * 2, spot * 2);
+    pen.restore();
+    for (const p of GLINTS) {
+      const d = p.row ** 1.3;
+      const y = horizon + 0.5 + d * depth;
+      const w = w0 + (w1 - w0) * d;
+      const u = p.off * 0.5;
+      const x = bx + u * w + Math.sin(time * 0.7 + p.ph + y * 0.2) * w * 0.08;
+      const flick = Math.max(0, Math.sin(time * p.sp + p.ph));
+      const a = 1.6 * strength * flick * flick * Math.exp(-u * u * 2.4) * (0.55 + 0.45 * d);
+      if (a < 0.04) continue;
+      const len = (1.5 + p.len * 5) * (0.5 + d * 1.5) * Math.max(0.7, s * 1.4) * (1 - 0.5 * Math.abs(u));
+      pen.fillStyle = `rgba(${rgb},${Math.min(1, a).toFixed(3)})`;
+      pen.fillRect(x - len / 2, y, len, 0.8 + d);
+    }
+  };
+
+  // The lighthouse, seen from the side. Its beam turns round a vertical
+  // axis: long when it points sideways, short, wide and blinding when it
+  // points at you, faint when it points away behind the tower.
+  const BEAM_PERIOD = 9;
+  const lighthouse = (time, strength) => {
+    const { s, W, horizon } = geo;
+    const [lx, ly] = at(LAMP);
+    const turn = (time / BEAM_PERIOD) * 2 * Math.PI;
+    const side = Math.cos(turn), toward = Math.sin(turn);
+    const facing = Math.max(0, toward);
+    const power = strength * (0.18 + 0.82 * smooth(-0.35, 1, toward));
+    const ex = lx + side * s * 1100;
+    const ey = ly + s * (5 + 70 * facing);
+    const dx = ex - lx, dy = ey - ly, len = Math.hypot(dx, dy) || 1;
+    const nx = -dy / len, ny = dx / len;
+    const far = s * (28 + 150 * facing);
+    pen.save();
+    pen.globalCompositeOperation = "lighter";
+
+    // Layers of cone, wide and faint to narrow and bright, read as haze.
+    for (const [width, alpha] of [[1, 0.05], [0.62, 0.08], [0.34, 0.13], [0.14, 0.24]]) {
+      const cone = pen.createLinearGradient(lx, ly, ex, ey);
+      cone.addColorStop(0, `rgba(255,241,206,${(alpha * power).toFixed(3)})`);
+      cone.addColorStop(0.55, `rgba(255,236,196,${(alpha * power * 0.35).toFixed(3)})`);
+      cone.addColorStop(1, "rgba(255,236,196,0)");
+      const w0 = s * 4 * width + 0.6, w1 = far * width;
+      pen.fillStyle = cone;
+      pen.beginPath();
+      pen.moveTo(lx + nx * w0, ly + ny * w0);
+      pen.lineTo(ex + nx * w1, ey + ny * w1);
+      pen.lineTo(ex - nx * w1, ey - ny * w1);
+      pen.lineTo(lx - nx * w0, ly - ny * w0);
+      pen.fill();
+    }
+
+    // Where the beam crosses the sea, the water picks it up.
+    pen.save();
+    pen.clip(sea);
+    const graze = pen.createLinearGradient(lx, 0, ex, 0);
+    graze.addColorStop(0, `rgba(255,236,200,${(0.22 * power).toFixed(3)})`);
+    graze.addColorStop(1, "rgba(255,236,200,0)");
+    pen.fillStyle = graze;
+    pen.fillRect(Math.min(lx, ex), horizon, Math.abs(ex - lx), Math.max(2, s * 14));
+    pen.restore();
+
+    // The lamp, and the flash as the beam swings past you
+    const flash = facing ** 8;
+    const r = s * 18 * (1 + 3.5 * flash);
+    const lamp = pen.createRadialGradient(lx, ly, 0, lx, ly, r);
+    lamp.addColorStop(0, `rgba(255,253,240,${(0.95 * strength).toFixed(3)})`);
+    lamp.addColorStop(0.18, `rgba(255,236,185,${(strength * (0.45 + 0.5 * flash)).toFixed(3)})`);
+    lamp.addColorStop(1, "rgba(255,220,160,0)");
+    pen.fillStyle = lamp;
+    pen.fillRect(lx - r, ly - r, r * 2, r * 2);
+    if (flash > 0.02) {
+      // A horizontal streak, like a lens catching it
+      pen.save();
+      pen.translate(lx, ly);
+      pen.scale(1, 0.03);
+      const streak = s * 620 * flash;
+      const line = pen.createRadialGradient(0, 0, 0, 0, 0, streak);
+      line.addColorStop(0, `rgba(235,240,255,${(0.5 * flash * strength).toFixed(3)})`);
+      line.addColorStop(1, "rgba(235,240,255,0)");
+      pen.fillStyle = line;
+      pen.fillRect(-streak, -streak, streak * 2, streak * 2);
+      pen.restore();
+      // and the whole scene lit for a moment
+      const wash = pen.createRadialGradient(lx, ly, 0, lx, ly, W * 0.5);
+      wash.addColorStop(0, `rgba(255,232,190,${(0.12 * flash * strength).toFixed(3)})`);
+      wash.addColorStop(1, "rgba(255,232,190,0)");
+      pen.fillStyle = wash;
+      pen.fillRect(0, 0, W, geo.H);
+    }
+    pen.restore();
+  };
+
+  let skyFrame = 0, lastSky = 0, pathShown = 0, pathWanted = 0, skyOnScreen = true;
+  const drawSky = (now) => {
+    const st = skyState;
+    if (!geo || !st || !st.path) return;
+    const { W, H, dpr } = geo;
+    const time = now / 1000;
+    pen.setTransform(dpr, 0, 0, dpr, 0, 0);
+    pen.clearRect(0, 0, W, H);
+
+    // Hidden behind the hills, a body lights no path on the water.
+    const sunShine = st.sunVis * shows(st.sunAt) * (0.18 + 0.82 * (1 - smooth(4, 32, st.sun.alt)) + 0.6 * st.gold);
+    const moonShine = st.moonVis * shows(st.moonAt) * st.night * (0.3 + 0.7 * st.lit);
+    pen.save();
+    pen.clip(sea);
+    pen.globalCompositeOperation = "lighter";
+    if (sunShine > 0.02) {
+      const [r, g, b] = mix([255, 246, 225], [255, 170, 90], st.gold);
+      glints(st.sunAt[0], st.sun.alt, `${r},${g},${b}`, sunShine, time);
+    }
+    if (moonShine > 0.02) glints(st.moonAt[0], -st.sun.alt, "236,238,255", moonShine, time);
+    pen.restore();
+
+    if (st.night > 0.08) lighthouse(time, Math.min(1, st.night * 1.6 - 0.3));
+
+    if (pathShown > 0.01) {
+      const [past, ahead] = st.path;
+      pen.save();
+      pen.shadowColor = `rgba(8,14,32,${(0.6 * pathShown).toFixed(3)})`;
+      pen.shadowBlur = 3;
+      pen.fillStyle = `rgba(255,255,255,${(0.55 * pathShown).toFixed(3)})`;
+      pen.fill(past);
+      pen.fillStyle = `rgba(255,255,255,${(0.92 * pathShown).toFixed(3)})`;
+      pen.fill(ahead);
+      pen.restore();
+    }
+  };
+  // The water and the lighthouse move all the time, at 30 frames a second,
+  // and only while the banner is on screen.
+  const tickSky = (now) => {
+    skyFrame = 0;
+    if (document.hidden || !skyOnScreen) return;
+    const fading = pathShown !== pathWanted;
+    if (fading) {
+      pathShown += (pathWanted - pathShown) * 0.2;
+      if (Math.abs(pathWanted - pathShown) < 0.01) pathShown = pathWanted;
+    }
+    if (fading || now - lastSky > 31) {
+      lastSky = now;
+      drawSky(now);
+    }
+    if (!reduced || pathShown !== pathWanted) skyFrame = requestAnimationFrame(tickSky);
+  };
+  function wakeSky() {
+    if (reduced) {
+      pathShown = pathWanted;
+      drawSky(0);
+    } else if (!skyFrame && !document.hidden) {
+      skyFrame = requestAnimationFrame(tickSky);
+    }
+  }
+  new IntersectionObserver(([e]) => {
+    skyOnScreen = e.isIntersecting;
+    if (skyOnScreen) wakeSky();
+  }).observe(landscape);
+
+  // Minutes from now until the sun next crosses the horizon.
+  const sunCrossing = (rising) => {
+    const now = Date.now();
+    let before = sunAt(now).alt;
+    for (let m = 2; m <= 1440; m += 2) {
+      const a = sunAt(now + m * 6e4).alt;
+      if (rising ? before < -0.8 && a >= -0.8 : before >= -0.8 && a < -0.8) return m;
+      before = a;
+    }
+    return 0;
+  };
+
   const clock = document.getElementById("clock");
   const doing = document.getElementById("doing");
+  const timeEl = document.getElementById("time");
   const clockFormat = new Intl.DateTimeFormat("en-GB", {
     timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
   });
@@ -12,11 +513,137 @@
       : h < 10 ? "morning chai"
         : !weekend && h < 19 ? "at the day job"
           : "side-project hours";
+  // Once someone has moved the sun, the label stops telling them they can.
+  let dragged = false;
+  try { dragged = localStorage.getItem("sky-dragged") === "1"; } catch { /* storage is optional */ }
+  // Minutes the sky has been dragged away from now.
+  let skew = 0;
   const setClock = () => {
-    const p = Object.fromEntries(clockFormat.formatToParts(new Date()).map((x) => [x.type, x.value]));
+    const t = Date.now() + skew * 6e4;
+    const p = Object.fromEntries(clockFormat.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
     clock.textContent = `${p.hour}:${p.minute}`;
     doing.textContent = guess(+p.hour, p.weekday === "Sat" || p.weekday === "Sun");
+    const sun = paintSky(t);
+    const skewed = Math.round(skew) !== 0;
+    tag.textContent = dragged ? clock.textContent : `${clock.textContent} · drag the ${skyState.isSun ? "sun" : "moon"}`;
+    skyNote.textContent = `${skewed ? `${clock.textContent} in Surat` : "Lit by the sun over Surat"} · ${sun}`;
+    timeEl.classList.toggle("is-skewed", skewed);
+    landscape.classList.toggle("is-skewed", skewed);
+    timeEl.setAttribute("aria-valuenow", String(+p.hour * 60 + +p.minute));
+    timeEl.setAttribute("aria-valuetext", `${clock.textContent} in Surat, ${sun}`);
   };
+
+  let glide = 0;
+  const glideTo = (target, ms = 900, done) => {
+    cancelAnimationFrame(glide);
+    glide = 0;
+    if (reduced || document.hidden) {
+      skew = target;
+      setClock();
+      return done?.();
+    }
+    const from = skew, t0 = performance.now();
+    const step = (now) => {
+      const k = Math.min(1, (now - t0) / ms);
+      skew = from + (target - from) * (k < 0.5 ? 4 * k ** 3 : 1 - (2 - 2 * k) ** 3 / 2);
+      setClock();
+      if (k < 1) glide = requestAnimationFrame(step);
+      else { glide = 0; done?.(); }
+    };
+    glide = requestAnimationFrame(step);
+  };
+  // Takes the short way round the clock face.
+  const wrap = (m) => ((((m % 1440) + 2160) % 1440) - 720);
+  const skyHome = () => { skew = wrap(skew); glideTo(0); };
+  const skyTo = (minutes, ms = 2600) => { skew = wrap(skew); glideTo(wrap(minutes), ms); };
+  const skyDay = () => {
+    skew = wrap(skew);
+    glideTo(skew + 1440, 12000, () => { skew = wrap(skew); setClock(); });
+  };
+
+  // Pointing at the banner (or the clock) shows the path the sun or moon is
+  // on, a ring round it and a label saying it can be dragged. First-time
+  // visitors get the same hint once, by itself, shortly after the page loads.
+  let drag = null, overSky = false, overClock = false, hinting = false;
+  const showPath = () => {
+    const on = overSky || overClock || hinting || !!drag;
+    pathWanted = on ? 1 : 0;
+    landscape.classList.toggle("show-path", on);
+    landscape.classList.toggle("show-note", on || Math.round(skew) !== 0);
+    wakeSky();
+  };
+  if (!dragged) {
+    setTimeout(() => {
+      hinting = true;
+      showPath();
+      setTimeout(() => { hinting = false; showPath(); }, 4500);
+    }, 1800);
+  }
+
+  // Dragging the sky moves the sun or moon along with the pointer. Dragging
+  // the clock scrubs it, later to the right.
+  const beginDrag = (e, el, perPx) => {
+    if (e.button) return;
+    cancelAnimationFrame(glide);
+    glide = 0;
+    drag = { x: e.clientX, from: skew, moved: false, perPx, el };
+    el.setPointerCapture(e.pointerId);
+    showPath();
+  };
+  const moveDrag = (e) => {
+    if (!drag) return;
+    const dx = e.clientX - drag.x;
+    if (Math.abs(dx) > 3 && !drag.moved) {
+      drag.moved = true;
+      root.classList.add("is-dragging-sky");
+    }
+    if (!drag.moved) return;
+    skew = drag.from + dx * drag.perPx;
+    setClock();
+  };
+  const endDrag = (e) => {
+    if (!drag) return;
+    const { moved, el } = drag;
+    drag = null;
+    root.classList.remove("is-dragging-sky");
+    if (moved && !dragged) {
+      dragged = true;
+      try { localStorage.setItem("sky-dragged", "1"); } catch { /* storage is optional */ }
+      setClock();
+    } else if (!moved && e.type === "pointerup" && (el === timeEl || Math.round(skew) !== 0)) {
+      skyHome();
+    }
+    showPath();
+  };
+  for (const el of [timeEl, landscape]) {
+    el.addEventListener("pointermove", moveDrag);
+    el.addEventListener("pointerup", endDrag);
+    el.addEventListener("pointercancel", endDrag);
+  }
+  timeEl.addEventListener("pointerdown", (e) => beginDrag(e, timeEl, 4)); // 360 px is a whole day
+  // 95° of hour angle (6 h 20 min) is half the banner.
+  landscape.addEventListener("pointerdown", (e) => { if (geo) beginDrag(e, landscape, -380 / bodySpan()); });
+  landscape.addEventListener("pointerenter", (e) => { if (e.pointerType === "mouse") { overSky = true; showPath(); } });
+  landscape.addEventListener("pointerleave", () => { overSky = false; showPath(); });
+  timeEl.addEventListener("pointerenter", () => { overClock = true; showPath(); });
+  timeEl.addEventListener("pointerleave", () => { overClock = false; showPath(); });
+  timeEl.addEventListener("focus", () => { overClock = true; showPath(); });
+  timeEl.addEventListener("blur", () => { overClock = false; showPath(); });
+  timeEl.addEventListener("keydown", (e) => {
+    const step = e.shiftKey ? 60 : 15;
+    const by = { ArrowLeft: -step, ArrowDown: -step, ArrowRight: step, ArrowUp: step }[e.key];
+    if (by) {
+      e.preventDefault();
+      cancelAnimationFrame(glide);
+      skew += by;
+      setClock();
+      showPath();
+    } else if (e.key === "Home" || e.key === "Escape" || e.key === "Enter") {
+      e.preventDefault();
+      skyHome();
+    }
+  });
+
   let clockTimer = 0;
   const refreshClock = () => {
     clearTimeout(clockTimer);
@@ -182,7 +809,7 @@
   // Month lines, today and the playhead go into the timeline and every track,
   // so they read as one line running down the page.
   const playheads = [];
-  let playheadWidth = 0, playheadPosition = 0;
+  let playheadWidth = 0, playheadPosition = 0, waveHeight = 0;
   const setPlayhead = (position) => {
     playheadPosition = position;
     const transform = `translateX(${position * playheadWidth}px)`;
@@ -234,6 +861,7 @@
   // Bars get a whole-pixel width, and a month label that would touch "today" is hidden.
   const fitBars = () => {
     playheadWidth = wave.clientWidth;
+    waveHeight = wave.clientHeight;
     setPlayhead(playheadPosition);
     const slot = playheadWidth / n;
     score.style.setProperty("--bw", `${Math.max(1, Math.round(slot * 0.66))}px`);
@@ -253,13 +881,6 @@
 
   // Pointing at a project makes its name do a tiny version of what the
   // project does. Nothing moves before that, and leaving undoes all of it.
-
-  const make = (tag, className = "", text = "") => {
-    const e = document.createElement(tag);
-    e.className = className;
-    e.textContent = text;
-    return e;
-  };
 
   let undoFx = [];
   const endFx = () => {
@@ -848,18 +1469,22 @@
     reset();
   };
 
+  const openSound = () => {
+    if (!AudioCtx) return null;
+    try {
+      audio ||= new AudioCtx();
+      audio.resume().catch(() => {});
+      return chain();
+    } catch {
+      // The visual timeline remains usable when audio is unavailable.
+      return null;
+    }
+  };
+
   const play = () => {
     if (document.hidden) return;
-    let sound = null;
-    if (AudioCtx) {
-      try {
-        audio ||= new AudioCtx();
-        audio.resume().catch(() => {});
-        sound = chain();
-      } catch {
-        // The visual timeline remains usable when audio is unavailable.
-      }
-    }
+    stopRide();
+    const sound = openSound();
     // Notes are scheduled on the audio clock; the picture follows the page clock,
     // so it still runs if the browser keeps the sound off.
     const t0 = performance.now() / 1000 + 0.12;
@@ -951,6 +1576,7 @@
     clearTimeout(leaveTimer);
     if (career) return;
     stop();
+    stopRide();
     reset();
     career = true;
     score.classList.add("is-career");
@@ -998,28 +1624,33 @@
   careerEl.addEventListener("pointerleave", () => { if (career) careerOverview(); });
 
   document.addEventListener("keydown", (e) => {
-    if (e.key === "Escape") { stop(); leaveCareer(); }
-    else if ((e.key === "p" || e.key === "P") && !e.ctrlKey && !e.metaKey && !e.altKey) {
+    if (e.defaultPrevented || e.target.closest?.("input, textarea, [contenteditable], dialog")) return;
+    const plain = !e.ctrlKey && !e.metaKey && !e.altKey;
+    if (e.key === "Escape") { stop(); stopRide(); leaveCareer(); }
+    else if ((e.key === "p" || e.key === "P") && plain) {
       leaveCareer();
       toggle();
+    } else if ((e.key === "b" || e.key === "B") && plain && !riding) {
+      startRide();
     }
   });
 
   // Hovering is ignored while the year plays, so moving the mouse doesn't cut it off.
 
+  const busy = () => playing || riding || career;
   const list = document.querySelector(".works");
   list.addEventListener("pointerover", (e) => {
-    if (playing || career) return;
+    if (busy()) return;
     const row = rows.find((r) => r.el === e.target.closest(".work"));
     if (row && !(score.classList.contains("is-row") && row.el.classList.contains("is-on"))) focusRow(row);
   });
-  list.addEventListener("pointerleave", () => { if (!playing && !career) reset(); });
+  list.addEventListener("pointerleave", () => { if (!busy()) reset(); });
   list.addEventListener("focusin", (e) => {
-    if (playing || career) return;
+    if (busy()) return;
     const row = rows.find((r) => r.el === e.target.closest(".work"));
     if (row && !row.el.classList.contains("is-on")) focusRow(row);
   });
-  list.addEventListener("focusout", (e) => { if (!playing && !career && !list.contains(e.relatedTarget)) reset(); });
+  list.addEventListener("focusout", (e) => { if (!busy() && !list.contains(e.relatedTarget)) reset(); });
 
   const dayAt = (x) => {
     const box = wave.getBoundingClientRect();
@@ -1031,32 +1662,34 @@
     scrubFrame = 0;
   };
   timeline.addEventListener("pointermove", (e) => {
-    if (playing || career || document.hidden) return;
+    if (busy() || document.hidden) return;
     scrubX = e.clientX;
     if (!scrubFrame) scrubFrame = requestAnimationFrame(() => {
       scrubFrame = 0;
-      if (!playing && !career) scrubTo(dayAt(scrubX));
+      if (!busy()) scrubTo(dayAt(scrubX));
     });
   });
   timeline.addEventListener("pointerdown", (e) => {
-    if (career) return;
+    if (career || riding) return;
     cancelScrub();
     stop();
     scrubTo(dayAt(e.clientX));
   });
   timeline.addEventListener("pointerleave", (e) => {
     cancelScrub();
-    if (!playing && !career && e.pointerType !== "touch" && document.activeElement !== wave) reset();
+    if (!busy() && e.pointerType !== "touch" && document.activeElement !== wave) reset();
   });
   document.addEventListener("pointerdown", (e) => {
-    if (career || playBtn.contains(e.target) || timeline.contains(e.target)) return;
+    if (riding && !rideBtn.contains(e.target) && !e.target.closest(".palette")) stopRide();
+    if (career || riding || playBtn.contains(e.target) || timeline.contains(e.target)) return;
     if (playing) stop();
     else if (current >= 0) reset();
   });
 
-  wave.addEventListener("focus", () => { leaveCareer(); if (!playing) scrubTo(today); });
-  wave.addEventListener("blur", () => { if (!playing) reset(); });
+  wave.addEventListener("focus", () => { if (riding) return; leaveCareer(); if (!playing) scrubTo(today); });
+  wave.addEventListener("blur", () => { if (!playing && !riding) reset(); });
   wave.addEventListener("keydown", (e) => {
+    if (riding) return;
     const step = e.shiftKey ? 7 : 1;
     const next = {
       ArrowLeft: current - step, ArrowRight: current + step, Home: 0, End: today,
@@ -1065,6 +1698,334 @@
     e.preventDefault();
     stop();
     scrubTo(next);
+  });
+
+  // Ride the year. The red ball from Bounce drops onto the timeline and the
+  // busy days are its hills. Every day it touches plays that day's projects,
+  // and lights up; light all of them and the year plays back to you.
+
+  const page = document.querySelector(".page");
+  const rideBtn = document.getElementById("ride");
+  const hud = document.getElementById("hud");
+  const rider = make("span", "rider");
+  const riderCore = make("span");
+  rider.append(riderCore);
+  const workedDays = totals.reduce((c, v, i) => c + (v && i <= today ? 1 : 0), 0);
+  const ROLL = { ArrowLeft: -1, a: -1, A: -1, ArrowRight: 1, d: 1, D: 1 };
+  const JUMP = new Set(["ArrowUp", "w", "W", " "]);
+  const held = new Map();
+  let riding = null;
+
+  // The top of the bars under the ball, in pixels from the top of the timeline.
+  const groundAt = (x, r, W, H) => {
+    const slot = W / n;
+    const a = Math.max(0, Math.floor((x - r * 0.6) / slot));
+    const b = Math.min(today, Math.floor((x + r * 0.6) / slot));
+    let top = H / 2 - 0.75;
+    for (let i = a; i <= b; i++) {
+      if (totals[i]) top = Math.min(top, Math.min((1 - totals[i] / maxDay) * H / 2, H / 2 - 1));
+    }
+    return top;
+  };
+
+  const chord = (i) => {
+    const s = riding?.sound;
+    if (!s || audio.state !== "running") return;
+    rowsByDay[i].forEach((r) => pluck(s, pitch(r.pitchIndex), audio.currentTime + 0.005, r.counts[i] / maxCell));
+  };
+
+  const showHud = () => {
+    const s = riding;
+    hud.innerHTML = s.done
+      ? `The whole year, ridden. <b>Esc</b> to stop.`
+      : `<b>← →</b> roll, <b>↑</b> jump · ${s.got.size}/${workedDays} days · <b>Esc</b>`;
+  };
+
+  const touch = (s, i, landed) => {
+    if (i < 0 || i > today) return;
+    if (i !== s.day) {
+      s.day = i;
+      scrubTo(i, true);
+    }
+    if (!totals[i] || (!landed && s.got.has(i))) return;
+    chord(i);
+    if (s.got.has(i)) return;
+    s.got.add(i);
+    bars[i].classList.add("got");
+    if (s.got.size === workedDays) {
+      s.done = true;
+      page.classList.add("ridden");
+      show(`That's all ${workedDays} days I worked on something, across ${rows.length} projects. Thanks for riding.`);
+      if (s.sound && audio.state === "running") {
+        rows.forEach((r, k) => pluck(s.sound, pitch(r.pitchIndex), audio.currentTime + 0.25 + k * 0.09, 0.6));
+      }
+    }
+    showHud();
+  };
+
+  const stepRide = (now) => {
+    const s = riding;
+    if (!s) return;
+    const dt = Math.min(0.033, (now - s.last) / 1000);
+    s.last = now;
+    const W = playheadWidth, H = waveHeight;
+    if (!W || !H) { s.frame = requestAnimationFrame(stepRide); return; }
+    if (W !== s.W) { s.x *= W / s.W; s.W = W; }
+    const r = Math.max(3.5, Math.min(7, H * 0.1));
+    const slot = W / n;
+    const g = H * 30;
+    let dir = 0;
+    held.forEach((d) => { dir += d; });
+    dir = Math.sign(dir);
+
+    // Rolling
+    const grounded = now - s.landed < 90;
+    if (dir) s.vx += dir * H * (grounded ? 14 : 8) * dt;
+    else if (grounded) s.vx *= 0.004 ** dt;
+    s.vx = Math.max(-H * 2.6, Math.min(H * 2.6, s.vx));
+    let x = s.x + s.vx * dt;
+    const right = (today + 1) * slot - r;
+    if (x < r || x > right) {
+      x = Math.max(r, Math.min(right, x));
+      s.vx *= -0.4;
+    }
+    // A hill steeper than the ball can climb is a wall until it jumps.
+    if (groundAt(x, r, W, H) < s.y + r - r * 0.9) {
+      x = s.x;
+      s.vx *= -0.35;
+    }
+    s.x = x;
+
+    // Jumping and falling
+    if (now - s.wantJump < 140 && grounded) {
+      s.vy = -Math.sqrt(2 * g * H * 0.9);
+      s.wantJump = 0;
+      s.landed = 0;
+    }
+    s.vy += g * dt;
+    s.y += s.vy * dt;
+    const floor = groundAt(s.x, r, W, H) - r;
+    if (s.y >= floor) {
+      const impact = s.vy;
+      s.y = floor;
+      if (impact > H * 4) {
+        s.vy = -impact * 0.42;
+        s.squash = Math.min(1, impact / (H * 11));
+        touch(s, Math.floor(s.x / slot), true);
+      } else {
+        s.vy = 0;
+      }
+      s.landed = now;
+    }
+    const day = Math.floor(s.x / slot);
+    if (day !== s.day) {
+      if (now - s.landed < 90) touch(s, day, false);
+      else if (day >= 0 && day <= today) { s.day = day; scrubTo(day, true); }
+    }
+    setPlayhead((s.x - slot / 2) / W);
+
+    // Squash on landing, unless motion is reduced
+    s.squash *= 0.0005 ** dt;
+    const q = reduced ? 0 : s.squash;
+    rider.style.width = rider.style.height = `${r * 2}px`;
+    rider.style.transform = `translate(${(s.x - r).toFixed(2)}px, ${(s.y - r).toFixed(2)}px)`;
+    riderCore.style.transform = q > 0.01 ? `scale(${1 + 0.4 * q}, ${1 - 0.4 * q})` : "";
+    s.frame = requestAnimationFrame(stepRide);
+  };
+
+  const startRide = () => {
+    if (riding || document.hidden || !rows.length) return;
+    closePalette();
+    stop();
+    leaveCareer();
+    reset();
+    const sound = openSound();
+    if (sound) {
+      scopeUntil = Infinity;
+      pluckString(sound.analyser);
+    }
+    riding = {
+      x: 8, y: -waveHeight, vx: 0, vy: 0, W: playheadWidth, day: -1, got: new Set(),
+      sound, frame: 0, last: performance.now(), landed: 0, wantJump: 0, squash: 0, done: false,
+    };
+    wave.append(rider);
+    page.classList.add("is-riding");
+    show("Ride the year. Every day the ball touches plays the projects I worked on that day.");
+    showHud();
+    riding.frame = requestAnimationFrame(stepRide);
+  };
+
+  const stopRide = () => {
+    if (!riding) return;
+    const { frame, sound } = riding;
+    riding = null;
+    cancelAnimationFrame(frame);
+    held.clear();
+    rider.remove();
+    bars.forEach((b) => b.classList.remove("got"));
+    page.classList.remove("is-riding", "ridden");
+    if (sound) {
+      sound.master.gain.setTargetAtTime(0, audio.currentTime, 0.15);
+      sound.timer = setTimeout(sound.dispose, 1500);
+      scopeUntil = performance.now() + 700;
+    }
+    setPlayhead(0);
+    reset();
+  };
+
+  rideBtn.addEventListener("click", () => (riding ? stopRide() : startRide()));
+  document.addEventListener("keydown", (e) => {
+    if (!riding || e.ctrlKey || e.metaKey || e.altKey) return;
+    if (e.key in ROLL) {
+      e.preventDefault();
+      held.set(e.key.toLowerCase(), ROLL[e.key]);
+    } else if (JUMP.has(e.key)) {
+      e.preventDefault();
+      if (!e.repeat) riding.wantJump = performance.now();
+    }
+  });
+  document.addEventListener("keyup", (e) => { held.delete(e.key.toLowerCase()); });
+  window.addEventListener("blur", () => held.clear());
+
+  // Ctrl K, or /, opens everything on the page as a list you can type into.
+  // Moving through the projects points at them, so their names still do
+  // their tricks behind the list.
+
+  const isMac = /Mac|iPhone|iPad/.test(navigator.platform || navigator.userAgent);
+  const keysBtn = document.getElementById("keys");
+  const canHover = matchMedia("(hover: hover)");
+  keysBtn.textContent = !canHover.matches ? "Menu" : isMac ? "⌘K" : "Ctrl K";
+
+  const palette = make("dialog", "palette");
+  palette.setAttribute("aria-label", "Jump to anything");
+  palette.innerHTML = `
+    <input class="palette-q" type="text" placeholder="Jump to a project, or do something…" autocomplete="off"
+           spellcheck="false" role="combobox" aria-expanded="true" aria-controls="palette-list" aria-autocomplete="list">
+    <ul class="palette-list" id="palette-list" role="listbox"></ul>
+    <p class="palette-foot"><span>↑↓ choose</span><span>↵ go</span><span>esc close</span></p>`;
+  document.body.append(palette);
+  const paletteQ = palette.querySelector(".palette-q");
+  const paletteList = palette.querySelector(".palette-list");
+
+  const go = (href) => { location.href = href; };
+  const commands = [
+    ...rows.map((r) => ({
+      group: "Projects", label: r.name, hint: r.el.querySelector(".stack").textContent, row: r,
+      run: () => r.el.querySelector(".title a").click(),
+    })),
+    { group: "Play", label: "Play the year", hint: "P", run: () => { leaveCareer(); if (!playing) play(); } },
+    { group: "Play", label: "Ride the year", hint: "B", run: startRide, when: () => canHover.matches },
+    { group: "Play", label: "Watch a day go by in Surat", hint: "12 s", run: skyDay },
+    { group: "Play", label: "Skip to sunset", hint: "sky", run: () => skyTo(sunCrossing(false) + 12) },
+    { group: "Play", label: "Skip to sunrise", hint: "sky", run: () => skyTo(sunCrossing(true) - 12) },
+    { group: "Play", label: "Bring the sky back to now", hint: "sky", run: skyHome, when: () => Math.round(skew) !== 0 },
+    { group: "Page", label: () => (isDark() ? "Lights on" : "Lights off"), hint: "theme", run: () => toggleTheme(lightsBtn) },
+    { group: "Page", label: "Show experience", hint: "since 2023", run: () => { careerBtn.click(); } },
+    { group: "Page", label: "Copy email address", hint: "pprit362@gmail.com", run: () => copyBtn.click() },
+    { group: "Elsewhere", label: "Email me", hint: "mailto", run: () => go("mailto:pprit362@gmail.com") },
+    { group: "Elsewhere", label: "GitHub", hint: "Prit36", run: () => go("https://github.com/Prit36") },
+    { group: "Elsewhere", label: "LinkedIn", hint: "prit-prajapati36", run: () => go("https://www.linkedin.com/in/prit-prajapati36") },
+  ];
+  const labelOf = (c) => (typeof c.label === "function" ? c.label() : c.label);
+
+  // Letters in order, not necessarily together. Earlier and tighter is better.
+  const fuzzy = (text, q) => {
+    const t = text.toLowerCase();
+    let at = -1, score = 0;
+    const hits = [];
+    for (const ch of q) {
+      const j = t.indexOf(ch, at + 1);
+      if (j < 0) return null;
+      score += j === at + 1 ? 3 : j === 0 || t[j - 1] === " " ? 2 : 0.5;
+      hits.push(j);
+      at = j;
+    }
+    return { score: score - hits[0] * 0.05, hits };
+  };
+  const marked = (text, hits) => {
+    const li = document.createDocumentFragment();
+    [...text].forEach((ch, i) => li.append(hits?.includes(i) ? make("mark", "", ch) : ch));
+    return li;
+  };
+
+  let shown = [], picked = 0;
+  const pick = (k) => {
+    if (!shown.length) return;
+    picked = (k + shown.length) % shown.length;
+    shown.forEach(({ el }, i) => el.setAttribute("aria-selected", String(i === picked)));
+    const { el, c } = shown[picked];
+    el.scrollIntoView({ block: "nearest" });
+    paletteQ.setAttribute("aria-activedescendant", el.id);
+    if (busy()) return;
+    if (c.row) { if (!c.row.el.classList.contains("is-on")) focusRow(c.row); }
+    else if (score.classList.contains("is-row")) reset();
+  };
+  const renderPalette = () => {
+    const q = paletteQ.value.trim().toLowerCase().replace(/\s+/g, " ");
+    let found = commands.filter((c) => !c.when || c.when()).map((c, i) => {
+      const label = labelOf(c);
+      const m = q ? fuzzy(label, q) : { score: 0 };
+      return m && { c, label, i, ...m };
+    }).filter(Boolean);
+    if (q) found.sort((p, o) => o.score - p.score || p.i - o.i);
+    paletteList.textContent = "";
+    shown = [];
+    let group = "";
+    found.forEach((f, k) => {
+      if (!q && f.c.group !== group) {
+        group = f.c.group;
+        const h = make("li", "palette-group", group);
+        h.setAttribute("role", "presentation");
+        paletteList.append(h);
+      }
+      const el = make("li", "palette-item");
+      el.id = `palette-${k}`;
+      el.setAttribute("role", "option");
+      const name = make("span");
+      name.append(marked(f.label, f.hits));
+      el.append(name, make("span", "hint-r", f.c.hint || ""));
+      el.addEventListener("pointermove", () => { if (picked !== k) pick(k); });
+      el.addEventListener("click", () => runPick(k));
+      paletteList.append(el);
+      shown.push({ el, c: f.c });
+    });
+    if (!shown.length) paletteList.append(make("li", "palette-empty", `Nothing here matches “${paletteQ.value.trim()}”.`));
+    picked = 0;
+    pick(0);
+  };
+  const openPalette = () => {
+    if (palette.open) return;
+    paletteQ.value = "";
+    palette.showModal();
+    renderPalette();
+    paletteQ.focus();
+  };
+  function closePalette() {
+    if (palette.open) palette.close();
+  }
+  const runPick = (k) => {
+    const c = shown[k]?.c;
+    if (!c) return;
+    closePalette();
+    c.run();
+  };
+  palette.addEventListener("close", () => { if (!busy()) reset(); });
+  palette.addEventListener("click", (e) => { if (e.target === palette) closePalette(); });
+  paletteQ.addEventListener("input", renderPalette);
+  paletteQ.addEventListener("keydown", (e) => {
+    const by = { ArrowDown: 1, ArrowUp: -1, Tab: e.shiftKey ? -1 : 1 }[e.key];
+    if (by) { e.preventDefault(); pick(picked + by); }
+    else if (e.key === "Enter") { e.preventDefault(); runPick(picked); }
+  });
+  keysBtn.addEventListener("click", openPalette);
+  document.addEventListener("keydown", (e) => {
+    if ((e.key === "k" || e.key === "K") && (e.metaKey || e.ctrlKey) && !e.altKey) {
+      e.preventDefault();
+      if (palette.open) closePalette(); else openPalette();
+    } else if (e.key === "/" && !palette.open && !e.target.closest?.("input, textarea, [contenteditable]")) {
+      e.preventDefault();
+      openPalette();
+    }
   });
 
   document.getElementById("updated").textContent = stamp.format(parse(data.updated));
@@ -1084,6 +2045,13 @@
     clearTimeout(drawingTimer);
     score.classList.remove("drawing");
     stop();
+    stopRide();
+    cancelAnimationFrame(glide);
+    glide = 0;
+    cancelAnimationFrame(skyFrame);
+    skyFrame = 0;
+    drag = null;
+    root.classList.remove("is-dragging-sky");
     if (!career) reset();
     endFx();
     sounds.forEach((sound) => sound.dispose());
@@ -1091,12 +2059,15 @@
     settleRoll();
     waveObserver.disconnect();
     scopeObserver.disconnect();
+    skyObserver.disconnect();
   };
   const resumePage = () => {
     document.documentElement.classList.remove("is-paused");
     scheduleNameMeasure();
     waveObserver.observe(wave);
     scopeObserver.observe(summary);
+    skyObserver.observe(landscape);
+    wakeSky();
   };
   document.addEventListener("visibilitychange", () => document.hidden ? pausePage() : resumePage());
   window.addEventListener("pagehide", pausePage);
@@ -1127,7 +2098,8 @@
     `%c${spark}%c\nJuly to today, three days per bar.\n\n`
       + "Hand-written HTML, CSS and JS. No framework, no build step.\n"
       + "Source: https://github.com/Prit36/Prit36.github.io\n"
-      + "Press P on the page to hear the year.",
+      + "Press P on the page to hear the year, B to ride it, Ctrl K for everything else.\n"
+      + "The sun (or the moon) in the banner can be dragged to another hour.",
     "font: 18px/1 monospace; color: #6f7cff;",
     "font: 12px/1.5 monospace;",
   );

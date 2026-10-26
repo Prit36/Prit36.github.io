@@ -1,5 +1,6 @@
 <!doctype html>
-<!-- Hello. Press P on the page to hear the year. -->
+<!-- Hello. Press P to hear the year, B to ride it, or Ctrl K for everything else.
+     The sun (or the moon) in the banner can be dragged to another hour. -->
 <html lang="en">
 <head>
   <meta charset="utf-8">
@@ -14,14 +15,23 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&display=swap">
-  <link rel="stylesheet" href="style.css?v=contact-icons-16">
+  <link rel="stylesheet" href="style.css?v=sky-3">
+  <script>try { var t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
 </head>
 <body>
   <div class="landscape" aria-hidden="true">
     <img src="assets/coastal-banner.webp"
          srcset="assets/coastal-banner-small.webp 960w, assets/coastal-banner.webp 2172w"
          sizes="100vw" width="2172" height="724" alt="" fetchpriority="high">
+    <p class="sky-note mono" id="sky-note"></p>
   </div>
+  <button class="lights" id="lights" type="button" aria-label="Turn the lights off">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <mask id="lights-cut"><rect x="-4" y="-4" width="32" height="32" fill="#fff"/><circle class="cut" cx="26" cy="4" r="7" fill="#000"/></mask>
+      <circle class="orb" cx="12" cy="12" r="5" mask="url(#lights-cut)"/>
+      <path class="rays" d="M12 2v2.2M12 19.8V22M2 12h2.2M19.8 12H22M4.9 4.9l1.55 1.55M17.55 17.55l1.55 1.55M4.9 19.1l1.55-1.55M17.55 6.45l1.55-1.55"/>
+    </svg>
+  </button>
   <main class="page">
     <header class="top grid">
       <h1 class="name">Prit<br>Prajapati</h1>
@@ -37,7 +47,7 @@
         </li>
         <li>
           <svg class="ic solid" viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd" d="M8 0a8 8 0 1 0 0 16A8 8 0 0 0 8 0Zm-.75 3.75v4.56l2.97 1.78.77-1.28-2.24-1.35V3.75Z"/></svg>
-          <span><span id="clock">--:--</span> IST<span id="doing"></span></span>
+          <span><span class="time" id="time" tabindex="0" role="slider" aria-label="Time in Surat. Drag it, or use the arrow keys, to move the sun." aria-valuemin="0" aria-valuemax="1439" title="Drag to move the sun"><span id="clock">--:--</span> IST</span><span id="doing"></span></span>
         </li>
         <li>
           <svg class="ic solid" viewBox="0 0 16 16" aria-hidden="true"><path fill-rule="evenodd" d="M2 2h12a2 2 0 0 1 2 2v8a2 2 0 0 1-2 2H2a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2Zm-.5 1.25L8 7.8l6.5-4.55V4.9L8 9.45 1.5 4.9Z"/></svg>
@@ -181,12 +191,12 @@
     </section>
 
     <footer class="foot grid mono">
-      <p class="source">Timeline from public GitHub activity, updated <span id="updated">25 Oct 2026</span>. Times in IST.</p>
-      <p class="hint"><button class="play" id="play" type="button" aria-pressed="false">Play the year</button><span class="hover-only">, or hover a day.</span></p>
+      <p class="source">Timeline from public GitHub activity, updated <span id="updated">25 Oct 2026</span>. Times in IST.<button class="key" id="keys" type="button" aria-label="Open the command list">Ctrl K</button></p>
+      <p class="hint"><button class="play" id="play" type="button" aria-pressed="false">Play the year</button><span class="hover-only">, hover a day, or <button class="play ride" id="ride" type="button">ride it</button>.</span><span class="hud" id="hud"></span></p>
     </footer>
   </main>
 
   <script src="data.js"></script>
-  <script src="main.js?v=contact-icons-16"></script>
+  <script src="main.js?v=sky-3"></script>
 </body>
 </html>
