@@ -37,14 +37,25 @@
       }
       syncLights();
     };
-    if (reduced || !document.startViewTransition || document.hidden) return apply();
+    // Every colour on the page changes at once, so the page's own colour
+    // transitions are held off until the switch is done; only the icon moves.
+    // The hold goes on with the new colours, in the same style pass.
+    const switchTo = () => { root.classList.add("is-theming"); apply(); };
+    const settle = () => root.classList.remove("is-theming");
+    if (reduced || !document.startViewTransition || document.hidden) {
+      switchTo();
+      requestAnimationFrame(() => requestAnimationFrame(settle));
+      return;
+    }
     const b = from.getBoundingClientRect();
     const x = b.left + b.width / 2, y = b.top + b.height / 2;
     const r = Math.hypot(Math.max(x, innerWidth - x), Math.max(y, innerHeight - y));
-    document.startViewTransition(apply).ready.then(() => {
+    const switching = document.startViewTransition(switchTo);
+    switching.ready.then(() => {
       root.animate({ clipPath: [`circle(0 at ${x}px ${y}px)`, `circle(${r}px at ${x}px ${y}px)`] },
         { duration: 700, easing: "cubic-bezier(0.6, 0, 0.2, 1)", pseudoElement: "::view-transition-new(root)" });
     }).catch(() => {});
+    switching.finished.then(settle, settle);
   };
   const toggleTheme = (from) => setTheme(!isDark(), from);
   lightsBtn.addEventListener("click", () => toggleTheme(lightsBtn));
@@ -80,6 +91,19 @@
   const tag = sky.querySelector(".orb-tag");
   const glow = sky.querySelector(".glow");
   const pen = glow.getContext("2d");
+  // What only changes with the hour or the size of the banner, the soft light
+  // on the water and the dotted path, is drawn once into these and copied
+  // onto the glow each frame. Each holds memory only while it has something
+  // to show.
+  const layer = () => document.createElement("canvas").getContext("2d");
+  const water = layer(), trail = layer();
+  let waterDirty = true, trailDirty = true;
+  const fit = (c, w, h) => { if (c.width !== w || c.height !== h) { c.width = w; c.height = h; } };
+  // Writing a style that hasn't changed still costs a style pass.
+  const setVar = (el, name, value) => {
+    if (el.style.getPropertyValue(name) !== value) el.style.setProperty(name, value);
+  };
+  const setText = (el, text) => { if (el.textContent !== text) el.textContent = text; };
 
   // The same stars every night, and the same glints on the water.
   let seed = 36;
@@ -156,12 +180,17 @@
     const horizon = Math.max(0, oy + HORIZON * s);
     const dpr = Math.min(window.devicePixelRatio || 1, 2);
     const orb = Math.round(Math.max(12, Math.min(34, horizon * 0.34)));
-    geo = { W, H, s, ox, oy, horizon, dpr, orb };
-    glow.width = Math.round(W * dpr);
-    glow.height = Math.round(H * dpr);
-    landscape.style.setProperty("--s", s.toFixed(4));
-    landscape.style.setProperty("--horizon", `${horizon.toFixed(1)}px`);
-    landscape.style.setProperty("--orb", `${orb}px`);
+    // The water layer starts just above the horizon, the path layer stops
+    // just below it, both in device pixels.
+    const cw = Math.round(W * dpr), ch = Math.round(H * dpr);
+    const waterTop = Math.max(0, Math.min(ch - 1, Math.floor(horizon * dpr) - 4));
+    geo = { W, H, s, ox, oy, horizon, dpr, orb, waterTop };
+    geo.trailH = Math.min(ch, Math.ceil((horizon * 1.05 + 6) * dpr));
+    fit(glow, cw, ch);
+    waterDirty = trailDirty = true;
+    setVar(landscape, "--s", s.toFixed(4));
+    setVar(landscape, "--horizon", `${horizon.toFixed(1)}px`);
+    setVar(landscape, "--orb", `${orb}px`);
     sea = new Path2D();
     SEA.forEach(([u, v], i) => {
       const [x, y] = at([u * PAINTING[0], v * PAINTING[1]]);
@@ -177,6 +206,7 @@
       e.style.left = `${x.toFixed(1)}px`;
       e.style.top = `${y.toFixed(1)}px`;
     });
+    geo.arc = arcEnds();
     if (skyState) layoutSky();
   };
   const skyObserver = new ResizeObserver(placeSky);
@@ -227,9 +257,9 @@
     const rise = Math.min(geo.ox + ARC[1] * geo.s, open ? open[0] + geo.orb * 2 : Infinity);
     return [Math.max(geo.ox + ARC[0] * geo.s, geo.orb * 1.2), rise];
   };
-  const bodySpan = () => { const [a, b] = arcEnds(); return (b - a) / 2; };
+  const bodySpan = () => { const [a, b] = geo.arc; return (b - a) / 2; };
   const bodyAt = ({ hour, alt }) => {
-    const [a, b] = arcEnds();
+    const [a, b] = geo.arc;
     const top = Math.max(geo.oy + 70 * geo.s, geo.orb * 0.95);
     const k = alt >= 0 ? Math.sin((Math.min(1, alt / 50) * Math.PI) / 2) : alt / 12;
     return [(a + b) / 2 - (hour / 95) * (b - a) / 2, geo.horizon - k * Math.max(0, geo.horizon - top)];
@@ -250,10 +280,12 @@
     const night = smooth(4, -9, alt);
     const gold = Math.exp(-(((alt - 2.5) / 6.5) ** 2));
     const phase = phaseAt(t);
-    landscape.style.setProperty("--night", night.toFixed(3));
-    landscape.style.setProperty("--gold", gold.toFixed(3));
+    setVar(landscape, "--night", night.toFixed(3));
+    setVar(landscape, "--gold", gold.toFixed(3));
     landscape.classList.toggle("is-night", night > 0.02);
-    moonLit.setAttribute("d", moonPath(phase));
+    landscape.classList.toggle("is-gold", gold > 0.01);
+    const lit = moonPath(phase);
+    if (lit !== moonLit.getAttribute("d")) moonLit.setAttribute("d", lit);
     skyState = {
       t, sun, night, gold, phase,
       lit: (1 - Math.cos(2 * Math.PI * phase)) / 2,
@@ -271,10 +303,13 @@
     st.sunAt = bodyAt(st.sun);
     st.moonAt = bodyAt(moonOf(st.sun));
     const [r, g, b] = mix([255, 238, 190], [255, 140, 60], st.gold);
-    sunEl.style.setProperty("--sun", `rgb(${r} ${g} ${b})`);
-    sunEl.style.setProperty("--sun-halo", `rgb(${r} ${g} ${b} / ${(0.35 + 0.3 * st.gold).toFixed(2)})`);
+    setVar(sunEl, "--sun", `rgb(${r} ${g} ${b})`);
+    setVar(sunEl, "--sun-halo", `rgb(${r} ${g} ${b} / ${(0.35 + 0.3 * st.gold).toFixed(2)})`);
+    // A body below the horizon isn't painted at all, glow and shadow included.
+    sunEl.style.visibility = st.sunVis > 0.001 ? "" : "hidden";
     sunEl.style.transform = `translate(${st.sunAt[0].toFixed(1)}px, ${st.sunAt[1].toFixed(1)}px)`;
     sunEl.style.opacity = st.sunVis.toFixed(3);
+    moonEl.style.visibility = st.moonVis > 0.001 ? "" : "hidden";
     moonEl.style.transform = `translate(${st.moonAt[0].toFixed(1)}px, ${st.moonAt[1].toFixed(1)}px)`;
     moonEl.style.opacity = st.moonVis.toFixed(3);
 
@@ -284,20 +319,11 @@
     const side = x > geo.W * 0.62 ? `calc(${(x - geo.orb).toFixed(1)}px - 100%)` : `${(x + geo.orb).toFixed(1)}px`;
     tag.style.transform = `translate(${side}, calc(${Math.max(y, geo.orb * 0.6).toFixed(1)}px - 50%))`;
 
-    // Its path through this part of the day, dotted: done in faint dots,
-    // still to come in bright ones.
-    const past = new Path2D(), ahead = new Path2D();
-    for (let m = -12 * 60; m <= 12 * 60; m += 9) {
-      const p = sunAt(st.t + m * 6e4);
-      const q = st.isSun ? p : moonOf(p);
-      if (q.alt < -0.5) continue;
-      const [px, py] = bodyAt(q);
-      if (Math.hypot(px - x, py - y) < geo.orb * 0.85) continue;
-      const path = m < 0 ? past : ahead;
-      path.moveTo(px + 1.1, py);
-      path.arc(px, py, 1.1, 0, 2 * Math.PI);
-    }
-    st.path = [past, ahead];
+    // Hidden behind the hills, a body lights no path on the water.
+    st.sunShine = st.sunVis * shows(st.sunAt) * (0.18 + 0.82 * (1 - smooth(4, 32, st.sun.alt)) + 0.6 * st.gold);
+    st.moonShine = st.moonVis * shows(st.moonAt) * st.night * (0.3 + 0.7 * st.lit);
+    st.sunRgb = mix([255, 246, 225], [255, 170, 90], st.gold).join(",");
+    waterDirty = trailDirty = true;
     wakeSky();
   };
 
@@ -305,47 +331,107 @@
   // the sun or moon, narrow where it meets the horizon and wider close by,
   // made of a soft glow and glints that flicker on the swell. The higher the
   // body, the wider and the more its light gathers near you.
-  const glints = (bx, alt, rgb, strength, time) => {
-    const { H, horizon, orb, s } = geo;
+  const reach = (alt) => {
+    const high = Math.sin(Math.min(80, Math.max(0, alt)) * RAD);
+    return [high, geo.orb * (0.22 + 0.35 * high), geo.orb * (0.9 + 1.8 * high)];
+  };
+  // The soft glow holds still, so it goes on the water layer.
+  const sheen = (bx, alt, rgb, strength) => {
+    const { H, horizon, orb } = geo;
     const depth = H - horizon;
     if (depth < 2) return;
-    const high = Math.sin(Math.min(80, Math.max(0, alt)) * RAD);
-    const w0 = orb * (0.22 + 0.35 * high), w1 = orb * (0.9 + 1.8 * high);
+    const [high, w0, w1] = reach(alt);
     const rows = 18;
     for (let i = 0; i < rows; i++) {
       const d = i / rows, w = w0 + (w1 - w0) * d;
       const a = 0.3 * strength * (1 - 0.75 * high * (1 - d)) * (1 - 0.35 * d);
-      const band = pen.createLinearGradient(bx - w, 0, bx + w, 0);
+      const band = water.createLinearGradient(bx - w, 0, bx + w, 0);
       band.addColorStop(0, `rgba(${rgb},0)`);
       band.addColorStop(0.5, `rgba(${rgb},${Math.min(0.5, a).toFixed(3)})`);
       band.addColorStop(1, `rgba(${rgb},0)`);
-      pen.fillStyle = band;
-      pen.fillRect(bx - w, horizon + d * depth, w * 2, depth / rows + 0.5);
+      water.fillStyle = band;
+      water.fillRect(bx - w, horizon + d * depth, w * 2, depth / rows + 0.5);
     }
     // Where the path meets the horizon, a low body burns brightest.
     const spot = orb * 0.9;
-    pen.save();
-    pen.translate(bx, horizon);
-    pen.scale(1, 0.3);
-    const meet = pen.createRadialGradient(0, 0, 0, 0, 0, spot);
+    water.save();
+    water.translate(bx, horizon);
+    water.scale(1, 0.3);
+    const meet = water.createRadialGradient(0, 0, 0, 0, 0, spot);
     meet.addColorStop(0, `rgba(${rgb},${(0.7 * strength * (1 - high)).toFixed(3)})`);
     meet.addColorStop(1, `rgba(${rgb},0)`);
-    pen.fillStyle = meet;
-    pen.fillRect(-spot, -spot, spot * 2, spot * 2);
-    pen.restore();
+    water.fillStyle = meet;
+    water.fillRect(-spot, -spot, spot * 2, spot * 2);
+    water.restore();
+  };
+  // The glints flicker, so they are drawn every frame: one colour, with only
+  // the alpha changing from glint to glint.
+  const glints = (bx, alt, rgb, strength, time) => {
+    const { H, horizon, s } = geo;
+    const depth = H - horizon;
+    if (depth < 2) return;
+    const [, w0, w1] = reach(alt);
+    const scale = Math.max(0.7, s * 1.4);
+    pen.fillStyle = `rgb(${rgb})`;
     for (const p of GLINTS) {
-      const d = p.row ** 1.3;
-      const y = horizon + 0.5 + d * depth;
-      const w = w0 + (w1 - w0) * d;
-      const u = p.off * 0.5;
-      const x = bx + u * w + Math.sin(time * 0.7 + p.ph + y * 0.2) * w * 0.08;
       const flick = Math.max(0, Math.sin(time * p.sp + p.ph));
+      if (flick < 0.12) continue; // too dim to see whatever the strength
+      const d = p.row ** 1.3;
+      const u = p.off * 0.5;
       const a = 1.6 * strength * flick * flick * Math.exp(-u * u * 2.4) * (0.55 + 0.45 * d);
       if (a < 0.04) continue;
-      const len = (1.5 + p.len * 5) * (0.5 + d * 1.5) * Math.max(0.7, s * 1.4) * (1 - 0.5 * Math.abs(u));
-      pen.fillStyle = `rgba(${rgb},${Math.min(1, a).toFixed(3)})`;
+      const y = horizon + 0.5 + d * depth;
+      const w = w0 + (w1 - w0) * d;
+      const x = bx + u * w + Math.sin(time * 0.7 + p.ph + y * 0.2) * w * 0.08;
+      const len = (1.5 + p.len * 5) * (0.5 + d * 1.5) * scale * (1 - 0.5 * Math.abs(u));
+      pen.globalAlpha = Math.min(1, a);
       pen.fillRect(x - len / 2, y, len, 0.8 + d);
     }
+    pen.globalAlpha = 1;
+  };
+  const paintWater = () => {
+    const st = skyState, { dpr, waterTop } = geo;
+    waterDirty = false;
+    if (st.sunShine <= 0.02 && st.moonShine <= 0.02) return fit(water.canvas, 0, 0);
+    fit(water.canvas, glow.width, glow.height - waterTop);
+    water.setTransform(1, 0, 0, 1, 0, 0);
+    water.clearRect(0, 0, water.canvas.width, water.canvas.height);
+    water.setTransform(dpr, 0, 0, dpr, 0, -waterTop);
+    water.save();
+    water.clip(sea);
+    water.globalCompositeOperation = "lighter";
+    if (st.sunShine > 0.02) sheen(st.sunAt[0], st.sun.alt, st.sunRgb, st.sunShine);
+    if (st.moonShine > 0.02) sheen(st.moonAt[0], -st.sun.alt, "236,238,255", st.moonShine);
+    water.restore();
+  };
+
+  // The path of the sun or moon through this part of the day, dotted: done in
+  // faint dots, still to come in bright ones. Only worked out when shown.
+  const paintTrail = () => {
+    const st = skyState, { dpr, orb } = geo;
+    trailDirty = false;
+    const [x, y] = st.isSun ? st.sunAt : st.moonAt;
+    const past = new Path2D(), ahead = new Path2D();
+    for (let m = -12 * 60; m <= 12 * 60; m += 9) {
+      const p = sunAt(st.t + m * 6e4);
+      const q = st.isSun ? p : moonOf(p);
+      if (q.alt < -0.5) continue;
+      const [px, py] = bodyAt(q);
+      if (Math.hypot(px - x, py - y) < orb * 0.85) continue;
+      const path = m < 0 ? past : ahead;
+      path.moveTo(px + 1.1, py);
+      path.arc(px, py, 1.1, 0, 2 * Math.PI);
+    }
+    fit(trail.canvas, glow.width, geo.trailH);
+    trail.setTransform(1, 0, 0, 1, 0, 0);
+    trail.clearRect(0, 0, trail.canvas.width, trail.canvas.height);
+    trail.setTransform(dpr, 0, 0, dpr, 0, 0);
+    trail.shadowColor = "rgba(8,14,32,0.6)";
+    trail.shadowBlur = 3;
+    trail.fillStyle = "rgba(255,255,255,0.55)";
+    trail.fill(past);
+    trail.fillStyle = "rgba(255,255,255,0.92)";
+    trail.fill(ahead);
   };
 
   // The lighthouse, seen from the side. Its beam turns round a vertical
@@ -425,43 +511,48 @@
   };
 
   let skyFrame = 0, lastSky = 0, pathShown = 0, pathWanted = 0, skyOnScreen = true;
+  let skyDirty = true, skyLive = true;
+  // Draws one frame, and says whether anything in it moves on its own.
   const drawSky = (now) => {
     const st = skyState;
-    if (!geo || !st || !st.path) return;
-    const { W, H, dpr } = geo;
+    if (!geo || !st) return false;
+    const { dpr, waterTop } = geo;
     const time = now / 1000;
+    if (waterDirty) paintWater();
+    pen.setTransform(1, 0, 0, 1, 0, 0);
+    pen.clearRect(0, 0, glow.width, glow.height);
+    const sunShine = st.sunShine > 0.02, moonShine = st.moonShine > 0.02;
+    if (sunShine || moonShine) pen.drawImage(water.canvas, 0, waterTop);
     pen.setTransform(dpr, 0, 0, dpr, 0, 0);
-    pen.clearRect(0, 0, W, H);
 
-    // Hidden behind the hills, a body lights no path on the water.
-    const sunShine = st.sunVis * shows(st.sunAt) * (0.18 + 0.82 * (1 - smooth(4, 32, st.sun.alt)) + 0.6 * st.gold);
-    const moonShine = st.moonVis * shows(st.moonAt) * st.night * (0.3 + 0.7 * st.lit);
-    pen.save();
-    pen.clip(sea);
-    pen.globalCompositeOperation = "lighter";
-    if (sunShine > 0.02) {
-      const [r, g, b] = mix([255, 246, 225], [255, 170, 90], st.gold);
-      glints(st.sunAt[0], st.sun.alt, `${r},${g},${b}`, sunShine, time);
-    }
-    if (moonShine > 0.02) glints(st.moonAt[0], -st.sun.alt, "236,238,255", moonShine, time);
-    pen.restore();
-
-    if (st.night > 0.08) lighthouse(time, Math.min(1, st.night * 1.6 - 0.3));
-
-    if (pathShown > 0.01) {
-      const [past, ahead] = st.path;
+    if (sunShine || moonShine) {
       pen.save();
-      pen.shadowColor = `rgba(8,14,32,${(0.6 * pathShown).toFixed(3)})`;
-      pen.shadowBlur = 3;
-      pen.fillStyle = `rgba(255,255,255,${(0.55 * pathShown).toFixed(3)})`;
-      pen.fill(past);
-      pen.fillStyle = `rgba(255,255,255,${(0.92 * pathShown).toFixed(3)})`;
-      pen.fill(ahead);
+      pen.clip(sea);
+      pen.globalCompositeOperation = "lighter";
+      if (sunShine) glints(st.sunAt[0], st.sun.alt, st.sunRgb, st.sunShine, time);
+      if (moonShine) glints(st.moonAt[0], -st.sun.alt, "236,238,255", st.moonShine, time);
       pen.restore();
     }
+
+    const beam = st.night > 0.08;
+    if (beam) lighthouse(time, Math.min(1, st.night * 1.6 - 0.3));
+
+    if (pathShown > 0.01) {
+      if (trailDirty) paintTrail();
+      pen.setTransform(1, 0, 0, 1, 0, 0);
+      pen.globalAlpha = pathShown;
+      pen.drawImage(trail.canvas, 0, 0);
+      pen.globalAlpha = 1;
+    } else if (trail.canvas.width) {
+      fit(trail.canvas, 0, 0);
+      trailDirty = true;
+    }
+    return sunShine || moonShine || beam;
   };
   // The water and the lighthouse move all the time, at 30 frames a second,
-  // and only while the banner is on screen.
+  // and only while the banner is on screen. A frame that holds still is
+  // drawn once and left. A change of hour is drawn on the next frame, so the
+  // light on the water keeps up with a dragged sun.
   const tickSky = (now) => {
     skyFrame = 0;
     if (document.hidden || !skyOnScreen) return;
@@ -470,17 +561,19 @@
       pathShown += (pathWanted - pathShown) * 0.2;
       if (Math.abs(pathWanted - pathShown) < 0.01) pathShown = pathWanted;
     }
-    if (fading || now - lastSky > 31) {
+    if (fading || skyDirty || now - lastSky > 31) {
       lastSky = now;
-      drawSky(now);
+      skyDirty = false;
+      skyLive = drawSky(now);
     }
-    if (!reduced || pathShown !== pathWanted) skyFrame = requestAnimationFrame(tickSky);
+    if ((skyLive && !reduced) || pathShown !== pathWanted) skyFrame = requestAnimationFrame(tickSky);
   };
   function wakeSky() {
+    skyDirty = true;
     if (reduced) {
       pathShown = pathWanted;
       drawSky(0);
-    } else if (!skyFrame && !document.hidden) {
+    } else if (!skyFrame && !document.hidden && skyOnScreen) {
       skyFrame = requestAnimationFrame(tickSky);
     }
   }
@@ -504,9 +597,10 @@
   const clock = document.getElementById("clock");
   const doing = document.getElementById("doing");
   const timeEl = document.getElementById("time");
-  const clockFormat = new Intl.DateTimeFormat("en-GB", {
-    timeZone: "Asia/Kolkata", weekday: "short", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
-  });
+  // India keeps one offset all year, so the time there is plain arithmetic,
+  // cheap enough to run on every move of a drag.
+  const IST = 330 * 6e4;
+  const two = (n) => String(n).padStart(2, "0");
   // A guess at what I'm doing right now, from the time in Surat.
   const guess = (h, weekend) =>
     h < 7 ? "probably asleep"
@@ -519,19 +613,27 @@
   // Minutes the sky has been dragged away from now.
   let skew = 0;
   const setClock = () => {
+    cancelAnimationFrame(clockFrame);
+    clockFrame = 0;
     const t = Date.now() + skew * 6e4;
-    const p = Object.fromEntries(clockFormat.formatToParts(new Date(t)).map((x) => [x.type, x.value]));
-    clock.textContent = `${p.hour}:${p.minute}`;
-    doing.textContent = guess(+p.hour, p.weekday === "Sat" || p.weekday === "Sun");
+    const local = new Date(t + IST);
+    const h = local.getUTCHours(), m = local.getUTCMinutes(), day = local.getUTCDay();
+    const hm = `${two(h)}:${two(m)}`;
+    setText(clock, hm);
+    setText(doing, guess(h, day === 0 || day === 6));
     const sun = paintSky(t);
     const skewed = Math.round(skew) !== 0;
-    tag.textContent = dragged ? clock.textContent : `${clock.textContent} · drag the ${skyState.isSun ? "sun" : "moon"}`;
-    skyNote.textContent = `${skewed ? `${clock.textContent} in Surat` : "Lit by the sun over Surat"} · ${sun}`;
+    setText(tag, dragged ? hm : `${hm} · drag the ${skyState.isSun ? "sun" : "moon"}`);
+    setText(skyNote, `${skewed ? `${hm} in Surat` : "Lit by the sun over Surat"} · ${sun}`);
     timeEl.classList.toggle("is-skewed", skewed);
     landscape.classList.toggle("is-skewed", skewed);
-    timeEl.setAttribute("aria-valuenow", String(+p.hour * 60 + +p.minute));
-    timeEl.setAttribute("aria-valuetext", `${clock.textContent} in Surat, ${sun}`);
+    timeEl.setAttribute("aria-valuenow", String(h * 60 + m));
+    timeEl.setAttribute("aria-valuetext", `${hm} in Surat, ${sun}`);
   };
+  // Pointer and key events can come faster than frames; the sky only needs
+  // redoing once per frame.
+  let clockFrame = 0;
+  const queueClock = () => { if (!clockFrame) clockFrame = requestAnimationFrame(setClock); };
 
   let glide = 0;
   const glideTo = (target, ms = 900, done) => {
@@ -602,7 +704,7 @@
     }
     if (!drag.moved) return;
     skew = drag.from + dx * drag.perPx;
-    setClock();
+    queueClock();
   };
   const endDrag = (e) => {
     if (!drag) return;
@@ -638,8 +740,9 @@
     if (by) {
       e.preventDefault();
       cancelAnimationFrame(glide);
+      glide = 0;
       skew += by;
-      setClock();
+      queueClock();
       showPath();
     } else if (e.key === "Home" || e.key === "Escape" || e.key === "Enter") {
       e.preventDefault();
@@ -2053,6 +2156,8 @@
     glide = 0;
     cancelAnimationFrame(skyFrame);
     skyFrame = 0;
+    cancelAnimationFrame(clockFrame);
+    clockFrame = 0;
     drag = null;
     root.classList.remove("is-dragging-sky");
     if (!career) reset();
@@ -2089,6 +2194,7 @@
       scheduleNameMeasure();
       if (playing?.sound) pluckString(playing.sound.analyser);
     }
+    wakeSky();
   });
 
   // For anyone who opens the console: the same year, three days per bar.

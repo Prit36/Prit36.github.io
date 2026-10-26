@@ -61,6 +61,11 @@
 /* The new theme spreads out from the switch instead of cross-fading. */
 ::view-transition-old(root),
 ::view-transition-new(root) { animation: none; mix-blend-mode: normal; }
+/* While it spreads, the page's own colour transitions sit still; only the
+   switch's icon moves. */
+.is-theming *:not(.lights, .lights *),
+.is-theming *::before,
+.is-theming *::after { transition: none !important; }
 
 * { box-sizing: border-box; }
 
@@ -135,7 +140,9 @@ ul, ol { list-style: none; }
 .landscape { --night: 0; --gold: 0; --lit: 0; --s: 0.5; --horizon: 50%; }
 .sky { position: absolute; inset: 0; }
 .sky > * { position: absolute; }
-.tint { inset: 0; }
+.tint { inset: 0; display: none; }
+/* A blend layer at zero still costs a blend, so it is only there when lit. */
+.is-night .tint.dusk, .is-gold .tint.gold, .is-gold .tint.ember { display: block; }
 .tint.dusk {
   background: linear-gradient(to bottom, #16205a, #34488f 55%, #1c2a5c);
   mix-blend-mode: multiply;
@@ -255,9 +262,10 @@ ul, ol { list-style: none; }
   white-space: nowrap;
   pointer-events: none;
   opacity: 0;
-  transition: opacity 0.3s;
+  visibility: hidden;
+  transition: opacity 0.3s, visibility 0.3s;
 }
-.show-path .orb-tag { opacity: 1; }
+.show-path .orb-tag { opacity: 1; visibility: visible; }
 
 /* Somebody is home */
 .windows { inset: 0; opacity: calc(var(--night) * 1.4 - 0.3); mix-blend-mode: screen; }
