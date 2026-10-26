@@ -584,6 +584,9 @@
   // the clock scrubs it, later to the right.
   const beginDrag = (e, el, perPx) => {
     if (e.button) return;
+    // Otherwise the mouse starts a text selection that spans the page by the
+    // time the drag ends.
+    if (e.pointerType === "mouse") e.preventDefault();
     cancelAnimationFrame(glide);
     glide = 0;
     drag = { x: e.clientX, from: skew, moved: false, perPx, el };

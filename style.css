@@ -197,7 +197,8 @@ ul, ol { list-style: none; }
 /* The sun by day, the moon by night. Either can be picked up and dragged
    across the sky; pointing at the banner shows the path it is on. The water
    glints and the lighthouse beam are drawn on the canvas. */
-.landscape { pointer-events: auto; cursor: grab; touch-action: pan-y; }
+.landscape { pointer-events: auto; cursor: grab; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
+.landscape img { -webkit-user-drag: none; }
 .is-dragging-sky, .is-dragging-sky * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
 .glow { inset: 0; width: 100%; height: 100%; }
 /* Both are clipped to the sky above the skyline, so they pass behind the hills. */
