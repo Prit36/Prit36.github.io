@@ -24,7 +24,6 @@ TZ = dt.timezone(dt.timedelta(hours=5, minutes=30))  # IST
 # their commits were made under a git name that is not linked to the account.
 PROJECTS = {
     "fuelmate": (["repos/Prit36/fuelmate/commits"], False),
-    "markdown-pdf": (["repos/Prit36/markdown-pdf-studio/commits"], False),
     "pm2": (["repos/VishalJTalaviya/pm2-log-analyzer/commits",
              "repos/Prit36/pm2-log-analyzer/commits"], True),
     "pdf-compressor": (["repos/Prit36/pdf-compressor-wasm/commits"], False),
@@ -36,7 +35,7 @@ PROJECTS = {
     "bounce": (["repos/Prit36/Bounce/commits"], False),
     "whistle": (["repos/Prit36/whistle-desktop/commits"], False),
     "quarry": (["repos/Prit36/quarry-disk-analyzer/commits"], False),
-    "nanoui": (["repos/justrach/nanoui/pulls/22/commits"], True),
+    "argus": (["repos/Prit36/argus/commits"], False),
 }
 
 

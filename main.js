@@ -1055,12 +1055,6 @@
     // A tank filling up
     fuelmate: (k) => k.cls(k.a, "fx-fuel"),
 
-    // The heading as typed, then as rendered
-    "markdown-pdf": (k) => {
-      k.put(k.a, make("span", "fx-hash", "#"));
-      k.later(560, () => k.cls(k.a, "fx-rendered"));
-    },
-
     // Every letter is a request. They lift by response time, sort themselves
     // into a percentile curve with the slow tail in blue, then settle back.
     pm2: (k) => {
@@ -1245,8 +1239,34 @@
       });
     },
 
-    // Outlines, then subpixel colour fringes, then settled native text
-    nanoui: (k) => k.cls(k.a, "fx-raster"),
+    // A 60-second CPU graph scrolling where the label was, as Argus draws one
+    argus: (k) => {
+      const graph = k.put(k.a.parentElement, make("span", "fx-cpu"));
+      graph.style.left = `${k.stack.offsetLeft}px`;
+      k.cls(k.stack, "fx-gone");
+      const ns = "http://www.w3.org/2000/svg";
+      const svg = document.createElementNS(ns, "svg");
+      svg.setAttribute("viewBox", "0 0 60 20");
+      svg.setAttribute("preserveAspectRatio", "none");
+      const area = document.createElementNS(ns, "path");
+      const line = document.createElementNS(ns, "path");
+      svg.append(area, line);
+      graph.append(svg);
+      const ys = Array(61).fill(19);
+      let cpu = 0.2;
+      const tick = () => {
+        cpu += (Math.random() - 0.5) * 0.2 + (Math.random() < 0.08 ? 0.45 : 0);
+        cpu = Math.min(0.95, Math.max(0.04, cpu * 0.94));
+        ys.shift();
+        ys.push(20 - cpu * 19);
+        const d = ys.map((y, i) => `${i ? "L" : "M"}${i},${y.toFixed(1)}`).join("");
+        line.setAttribute("d", d);
+        area.setAttribute("d", `${d}L60,20L0,20Z`);
+      };
+      tick();
+      const t = setInterval(tick, 70);
+      k.undo(() => clearInterval(t));
+    },
   };
 
   const startFx = (r) => {
