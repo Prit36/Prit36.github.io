@@ -1,0 +1,560 @@
+import * as THREE from "three";
+import { rng } from "./land.js";
+import { stylize, swayingDepth, A2C, U, GROUND } from "./style.js";
+
+// Everything that grows: grass that the wind runs through in waves and that
+// parts round your feet, wildflowers in it, and trees built the way a
+// painter would build them: a trunk and branches, then masses of foliage
+// that read as soft round shapes, light on top, dark inside, glowing where
+// the sun comes through from behind.
+
+// ------------------------------------------------------------------ leaf textures
+// Drawn on a canvas, then copied out so the colour under the transparent
+// parts stays light (no dark fringes when it's filtered).
+function leafTexture(kind, seed) {
+  const S = 256;
+  const c = document.createElement("canvas");
+  c.width = c.height = S;
+  const g = c.getContext("2d");
+  const r = rng(seed);
+  const shade = (k) => `rgb(${k},${k},${Math.round(k * 0.96)})`;
+  if (kind === "leafy") {
+    for (let i = 0; i < 70; i++) {
+      const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 92;
+      const x = S / 2 + Math.cos(a) * d, y = S / 2 + Math.sin(a) * d;
+      g.save();
+      g.translate(x, y);
+      g.rotate(a + Math.PI / 2 + (r() - 0.5) * 1.2);
+      g.fillStyle = shade(150 + Math.floor(r() * 105));
+      g.beginPath();
+      g.ellipse(0, 0, 6 + r() * 4, 16 + r() * 8, 0, 0, Math.PI * 2);
+      g.fill();
+      g.restore();
+    }
+  } else if (kind === "needle") {
+    for (let i = 0; i < 26; i++) {
+      const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 70;
+      const x = S / 2 + Math.cos(a) * d, y = S / 2 + Math.sin(a) * d;
+      g.strokeStyle = shade(140 + Math.floor(r() * 115));
+      g.lineWidth = 3;
+      g.lineCap = "round";
+      for (let k = 0; k < 16; k++) {
+        const b = r() * Math.PI * 2, l = 22 + r() * 26;
+        g.beginPath();
+        g.moveTo(x, y);
+        g.lineTo(x + Math.cos(b) * l, y + Math.sin(b) * l);
+        g.stroke();
+      }
+    }
+  } else if (kind === "scale") {
+    for (let i = 0; i < 220; i++) {
+      const a = r() * Math.PI * 2, d = Math.sqrt(r()) * 104;
+      g.fillStyle = shade(130 + Math.floor(r() * 125));
+      g.beginPath();
+      g.arc(S / 2 + Math.cos(a) * d, S / 2 + Math.sin(a) * d, 5 + r() * 9, 0, Math.PI * 2);
+      g.fill();
+    }
+  } else if (kind === "frond") {
+    // a palm frond, rib along the middle, leaflets either side
+    g.strokeStyle = shade(200);
+    g.lineWidth = 5;
+    g.beginPath(); g.moveTo(S / 2, 0); g.lineTo(S / 2, S); g.stroke();
+    for (let y = 6; y < S - 4; y += 7) {
+      const l = 118 * Math.sin((y / S) * Math.PI) ** 0.6;
+      g.lineWidth = 5;
+      for (const sd of [-1, 1]) {
+        g.strokeStyle = shade(150 + Math.floor(r() * 100));
+        g.beginPath(); g.moveTo(S / 2, y); g.lineTo(S / 2 + sd * l, y + 26); g.stroke();
+      }
+    }
+  }
+  const src = g.getImageData(0, 0, S, S).data;
+  const data = new Uint8Array(S * S * 4);
+  for (let i = 0; i < S * S; i++) {
+    const a = src[i * 4 + 3];
+    data[i * 4] = a > 8 ? src[i * 4] : 205;
+    data[i * 4 + 1] = a > 8 ? src[i * 4 + 1] : 205;
+    data[i * 4 + 2] = a > 8 ? src[i * 4 + 2] : 198;
+    data[i * 4 + 3] = a;
+  }
+  const t = new THREE.DataTexture(data, S, S, THREE.RGBAFormat);
+  t.colorSpace = THREE.SRGBColorSpace;
+  t.magFilter = THREE.LinearFilter;
+  t.minFilter = THREE.LinearMipmapLinearFilter;
+  t.generateMipmaps = true;
+  t.anisotropy = 4;
+  t.flipY = false;
+  t.needsUpdate = true;
+  return t;
+}
+
+// ------------------------------------------------------------------ geometry helpers
+class Mesher {
+  constructor() { this.p = []; this.n = []; this.c = []; this.uv = []; this.i = []; }
+  get count() { return this.p.length / 3; }
+  vert(p, n, c, u = 0, v = 0) {
+    this.p.push(p.x, p.y, p.z); this.n.push(n.x, n.y, n.z); this.c.push(c.r, c.g, c.b); this.uv.push(u, v);
+    return this.count - 1;
+  }
+  geometry() {
+    const g = new THREE.BufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(this.p, 3));
+    g.setAttribute("normal", new THREE.Float32BufferAttribute(this.n, 3));
+    g.setAttribute("color", new THREE.Float32BufferAttribute(this.c, 3));
+    g.setAttribute("uv", new THREE.Float32BufferAttribute(this.uv, 2));
+    g.setIndex(this.i);
+    g.computeBoundingSphere();
+    return g;
+  }
+}
+const V = (x = 0, y = 0, z = 0) => new THREE.Vector3(x, y, z);
+
+// A tapering tube through a list of points: trunks, branches, stems.
+function tube(m, pts, radii, segs, color) {
+  const rings = [];
+  let nrm = null;
+  for (let i = 0; i < pts.length; i++) {
+    const t = V().subVectors(pts[Math.min(i + 1, pts.length - 1)], pts[Math.max(i - 1, 0)]).normalize();
+    if (!nrm) nrm = Math.abs(t.y) < 0.9 ? V(0, 1, 0).cross(t).normalize() : V(1, 0, 0).cross(t).normalize();
+    else nrm.sub(t.clone().multiplyScalar(nrm.dot(t))).normalize();
+    const bin = V().crossVectors(t, nrm);
+    const ring = [];
+    const k = i / (pts.length - 1);
+    for (let s = 0; s <= segs; s++) {
+      const a = (s / segs) * Math.PI * 2;
+      const d = nrm.clone().multiplyScalar(Math.cos(a)).addScaledVector(bin, Math.sin(a));
+      ring.push(m.vert(pts[i].clone().addScaledVector(d, radii[i]), d, color(k, a), s / segs, k));
+    }
+    rings.push(ring);
+  }
+  for (let i = 0; i < rings.length - 1; i++) {
+    for (let s = 0; s < segs; s++) {
+      const a = rings[i][s], b = rings[i][s + 1], c = rings[i + 1][s], d = rings[i + 1][s + 1];
+      m.i.push(a, c, b, b, c, d);
+    }
+  }
+}
+// A gently bent line from a to b, for branches.
+const bend = (a, b, n, sag, r) => {
+  const out = [];
+  const side = V(r() - 0.5, r() * 0.5, r() - 0.5).multiplyScalar(sag);
+  for (let i = 0; i <= n; i++) {
+    const k = i / n;
+    out.push(a.clone().lerp(b, k).addScaledVector(side, Math.sin(k * Math.PI)));
+  }
+  return out;
+};
+
+// Cards of foliage scattered through a set of ellipsoid clumps. Their
+// normals point out from the whole crown, so it shades as one soft mass.
+function foliage(m, o, r) {
+  const { clumps, count, size, center, squash = 1, top, bottom, inner = 0.55, jitter = 0.12 } = o;
+  const vols = clumps.map((c) => c.r.x * c.r.y * c.r.z);
+  const total = vols.reduce((a, b) => a + b, 0);
+  let minY = Infinity, maxY = -Infinity;
+  for (const c of clumps) { minY = Math.min(minY, c.c.y - c.r.y); maxY = Math.max(maxY, c.c.y + c.r.y); }
+  const col = new THREE.Color(), q = V();
+  for (let i = 0; i < count; i++) {
+    let pick = r() * total, ci = 0;
+    while (pick > vols[ci] && ci < vols.length - 1) pick -= vols[ci++];
+    const cl = clumps[ci];
+    const dir = V(r() * 2 - 1, r() * 2 - 1, r() * 2 - 1);
+    if (dir.lengthSq() > 1 || dir.lengthSq() < 0.01) { i--; continue; }
+    dir.normalize();
+    const rad = 0.42 + 0.58 * Math.pow(r(), 0.5);
+    const p = cl.c.clone().add(V(dir.x * cl.r.x, dir.y * cl.r.y, dir.z * cl.r.z).multiplyScalar(rad));
+    const s = size[0] + r() * (size[1] - size[0]);
+    const n = dir.clone().add(V(r() - 0.5, r() - 0.5, r() - 0.5).multiplyScalar(1.6)).normalize();
+    const t1 = V(r() - 0.5, r() - 0.5, r() - 0.5).cross(n).normalize();
+    const t2 = V().crossVectors(n, t1);
+    const hk = (p.y - minY) / Math.max(0.01, maxY - minY);
+    const depth = rad;
+    const tint = 1 - jitter + r() * jitter * 2;
+    const base = [];
+    for (const [a, b, u, v] of [[-1, -1, 0, 0], [1, -1, 1, 0], [1, 1, 1, 1], [-1, 1, 0, 1]]) {
+      const pos = p.clone().addScaledVector(t1, (a * s) / 2).addScaledVector(t2, (b * s) / 2);
+      q.subVectors(pos, center);
+      q.y *= squash;
+      q.normalize();
+      const nn = q.clone().multiplyScalar(0.88).addScaledVector(n.dot(q) < 0 ? n.clone().negate() : n, 0.12).normalize();
+      col.copy(bottom).lerp(top, Math.min(1, hk * 0.75 + (q.y * 0.5 + 0.5) * 0.35));
+      col.multiplyScalar((inner + (1 - inner) * depth) * tint);
+      base.push(m.vert(pos, nn, col, u, v));
+    }
+    m.i.push(base[0], base[1], base[2], base[0], base[2], base[3]);
+  }
+}
+
+const C = (h) => new THREE.Color(h);
+const barkColor = (lo, hi) => (k) => C(lo).lerp(C(hi), k);
+
+// ------------------------------------------------------------------ the trees
+// Each returns { wood, leaves } geometries, in metres, standing at the origin.
+function stonePine(seed) {
+  const r = rng(seed);
+  const H = 8 + r() * 3;
+  const wood = new Mesher(), leaves = new Mesher();
+  const lean = V((r() - 0.5) * 2.2, 0, (r() - 0.5) * 2.2);
+  const top = V(lean.x, H * 0.66, lean.z);
+  const bark = barkColor("#5e4636", "#8a6a50");
+  tube(wood, bend(V(0, -0.5, 0), top, 6, 0.8, r), [0.36, 0.32, 0.29, 0.26, 0.23, 0.2, 0.18], 7, (k) => bark(k));
+  const clumps = [];
+  const nb = 4 + Math.floor(r() * 3);
+  const crownR = 3.2 + r() * 1.4;
+  for (let b = 0; b < nb; b++) {
+    const a = (b / nb) * Math.PI * 2 + r() * 0.6;
+    const d = crownR * (0.55 + r() * 0.45);
+    const end = V(lean.x + Math.cos(a) * d, H * (0.8 + r() * 0.08), lean.z + Math.sin(a) * d);
+    tube(wood, bend(top, end, 4, 0.6, r), [0.17, 0.14, 0.11, 0.08, 0.06], 5, (k) => bark(0.5 + k * 0.5));
+    clumps.push({ c: end.clone().add(V(0, 0.45, 0)), r: V(1.9 + r() * 0.8, 0.95 + r() * 0.3, 1.9 + r() * 0.8) });
+  }
+  clumps.push({ c: V(lean.x, H * 0.9, lean.z), r: V(2.2, 1.05, 2.2) });
+  const center = V(lean.x, H * 0.86, lean.z);
+  foliage(leaves, { clumps, count: 300, size: [1.5, 2.2], center, squash: 2.2, top: C("#6a8a48"), bottom: C("#3a5530"), inner: 0.5 }, r);
+  return { wood: wood.geometry(), leaves: leaves.geometry(), height: H, radius: 0.35 };
+}
+
+function cypress(seed) {
+  const r = rng(seed);
+  const H = 9 + r() * 4, R = 0.95 + r() * 0.35;
+  const wood = new Mesher(), leaves = new Mesher();
+  tube(wood, [V(0, -0.4, 0), V(0, 1.2, 0), V(0, H * 0.7, 0)], [0.2, 0.17, 0.08], 6, barkColor("#4f3a2c", "#6b5040"));
+  const clumps = [];
+  for (let i = 0; i < 9; i++) {
+    const k = (i + 0.5) / 9;
+    const y = 0.7 + k * (H - 0.9);
+    const w = R * Math.pow(Math.sin(Math.min(1, k * 1.25 + 0.08) * Math.PI * 0.5 + (k > 0.6 ? (k - 0.6) * 1.6 : 0)), 0.8) * (1 - Math.pow(k, 2.6) * 0.92);
+    clumps.push({ c: V((r() - 0.5) * 0.15, y, (r() - 0.5) * 0.15), r: V(Math.max(0.18, w), H / 14, Math.max(0.18, w)) });
+  }
+  foliage(leaves, { clumps, count: 230, size: [0.75, 1.15], center: V(0, H * 0.45, 0), squash: 0.25, top: C("#4c6c3a"), bottom: C("#263f24"), inner: 0.45 }, r);
+  return { wood: wood.geometry(), leaves: leaves.geometry(), height: H, radius: 0.25 };
+}
+
+function olive(seed, palette = "olive") {
+  const r = rng(seed);
+  const big = palette === "oak";
+  const H = (big ? 6.5 : 4.2) + r() * 1.6;
+  const wood = new Mesher(), leaves = new Mesher();
+  const bark = big ? barkColor("#4d4036", "#6e5d4e") : barkColor("#5f554a", "#8d8273");
+  const clumps = [];
+  const stems = 2 + Math.floor(r() * 2);
+  for (let s = 0; s < stems; s++) {
+    const a = (s / stems) * Math.PI * 2 + r();
+    const fork = V(Math.cos(a) * 0.25, H * 0.32, Math.sin(a) * 0.25);
+    const end = V(Math.cos(a) * (1.2 + r()), H * (0.62 + r() * 0.12), Math.sin(a) * (1.2 + r()));
+    tube(wood, [V(0, -0.4, 0), V(Math.cos(a) * 0.1, H * 0.12, Math.sin(a) * 0.1), fork], [0.3, 0.26, 0.2], 7, (k) => bark(k * 0.4));
+    tube(wood, bend(fork, end, 4, 0.9, r), [0.19, 0.16, 0.12, 0.09, 0.07], 6, (k) => bark(0.4 + k * 0.6));
+    clumps.push({ c: end.clone().add(V(0, 0.5, 0)), r: V(1.5 + r() * 0.6, 1.1 + r() * 0.4, 1.5 + r() * 0.6).multiplyScalar(big ? 1.35 : 1) });
+  }
+  clumps.push({ c: V(0, H * 0.8, 0), r: V(1.7, 1.2, 1.7).multiplyScalar(big ? 1.4 : 1) });
+  const pal = big ? [C("#5f7e48"), C("#33502c")] : [C("#aebd98"), C("#6c7e5c")];
+  foliage(leaves, { clumps, count: big ? 300 : 240, size: big ? [1.4, 2] : [1.05, 1.5], center: V(0, H * 0.72, 0), squash: 1.3, top: pal[0], bottom: pal[1], inner: 0.55 }, r);
+  return { wood: wood.geometry(), leaves: leaves.geometry(), height: H, radius: 0.32 };
+}
+
+function palm(seed) {
+  const r = rng(seed);
+  const H = 7 + r() * 2.5;
+  const wood = new Mesher(), leaves = new Mesher();
+  const lean = V((r() - 0.5) * 1.6, 0, (r() - 0.5) * 1.6);
+  const pts = [], radii = [];
+  for (let i = 0; i <= 12; i++) {
+    const k = i / 12;
+    pts.push(V(lean.x * k * k, -0.3 + k * H, lean.z * k * k));
+    radii.push(0.28 - 0.08 * k);
+  }
+  tube(wood, pts, radii, 8, (k, a) => C("#8a7358").multiplyScalar(0.8 + 0.25 * (Math.sin(k * 70) * 0.5 + 0.5)));
+  const crown = pts[pts.length - 1];
+  const col = new THREE.Color();
+  const nf = 14;
+  for (let f = 0; f < nf; f++) {
+    const a = (f / nf) * Math.PI * 2 + r() * 0.3;
+    const up = 0.5 - r() * 0.7, len = 3.2 + r() * 1.2;
+    const dir = V(Math.cos(a), 0, Math.sin(a));
+    const side = V(-dir.z, 0, dir.x);
+    const segs = 8;
+    let prev = null;
+    for (let i = 0; i <= segs; i++) {
+      const k = i / segs;
+      const p = crown.clone().addScaledVector(dir, k * len).add(V(0, (up * k - k * k * 1.3) * len * 0.6, 0));
+      const w = 0.9 * Math.sin(Math.min(1, k * 1.4 + 0.15) * Math.PI) + 0.08;
+      const nrm = V(0, 1, 0).addScaledVector(dir, 0.3).normalize();
+      col.set("#7d9a4a").lerp(C("#4a6a30"), k * 0.5 + r() * 0.2);
+      const a1 = leaves.vert(p.clone().addScaledVector(side, -w), nrm, col, 0, k);
+      const a2 = leaves.vert(p.clone().addScaledVector(side, w), nrm, col, 1, k);
+      if (prev) leaves.i.push(prev[0], a1, prev[1], prev[1], a1, a2);
+      prev = [a1, a2];
+    }
+  }
+  return { wood: wood.geometry(), leaves: leaves.geometry(), height: H, radius: 0.3 };
+}
+
+function bush(seed, flowering = null) {
+  const r = rng(seed);
+  const leaves = new Mesher();
+  const clumps = [];
+  const n = 2 + Math.floor(r() * 3);
+  for (let i = 0; i < n; i++) {
+    const a = r() * Math.PI * 2, d = r() * 0.6;
+    const rr = 0.55 + r() * 0.45;
+    clumps.push({ c: V(Math.cos(a) * d, rr * 0.75, Math.sin(a) * d), r: V(rr * 1.15, rr * 0.85, rr * 1.15) });
+  }
+  const greens = [[C("#7f9850"), C("#3f5a30")], [C("#9aa86a"), C("#55693e")], [C("#6d8a46"), C("#344d2a")]];
+  const [top, bottom] = greens[Math.floor(r() * greens.length)];
+  foliage(leaves, { clumps, count: 46, size: [0.65, 1.0], center: V(0, 0.5, 0), squash: 1.2, top, bottom, inner: 0.5 }, r);
+  if (flowering) {
+    const c = C(flowering);
+    foliage(leaves, { clumps: clumps.map((k) => ({ c: k.c.clone().add(V(0, 0.08, 0)), r: k.r.clone().multiplyScalar(1.02) })), count: 22, size: [0.4, 0.62], center: V(0, 0.5, 0), squash: 1.2, top: c.clone().multiplyScalar(1.05), bottom: c.clone().multiplyScalar(0.7), inner: 0.75, jitter: 0.08 }, r);
+  }
+  return { leaves: leaves.geometry() };
+}
+
+// ------------------------------------------------------------------ planting
+const TEX = {};
+const tex = (k) => (TEX[k] ??= leafTexture(k, k.length * 17 + 3));
+
+function leafMaterial(kind, sway, flutter) {
+  const map = tex(kind);
+  const key = `leaf-${kind}-${sway}-${flutter}`;
+  const defines = { SWAY: sway, FLUTTER: flutter, FOLIAGE: "0.6", WRAP: "0.5" };
+  const mat = stylize(new THREE.MeshLambertMaterial({ map, vertexColors: true, side: THREE.DoubleSide, alphaTest: 0.04, alphaToCoverage: true }), {
+    key, defines, a2c: true, color: A2C, normal: "normal = normalize(vNormal);",
+  });
+  return { mat, depth: swayingDepth({ map, defines, key }) };
+}
+function barkMaterial(sway) {
+  return stylize(new THREE.MeshLambertMaterial({ vertexColors: true }), {
+    key: `bark-${sway}`,
+    defines: { SWAY: sway, CONTACT: "0.9", WRAP: "0.25" },
+    color: `{
+      vec2 bp = vec2(atan(vWorldN.z, vWorldN.x) * 3., vWorldP.y * 2.4);
+      float fur = vnoise(vec2(bp.x * 2.2, bp.y * 0.6)) * 0.6 + vnoise(bp * 4.) * 0.4;
+      diffuseColor.rgb *= 0.78 + 0.4 * fur;
+      gBump = fur * 0.04;
+    }`,
+  });
+}
+
+// Many copies, in patches of ground, so what's off screen isn't drawn.
+function patches(scene, parts, list, cell, far) {
+  const groups = new Map();
+  for (const p of list) {
+    const k = `${Math.floor(p.x / cell)},${Math.floor(p.z / cell)}`;
+    if (!groups.has(k)) groups.set(k, []);
+    groups.get(k).push(p);
+  }
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), v = new THREE.Vector3(), s = new THREE.Vector3(), c = new THREE.Color();
+  const chunks = [];
+  for (const items of groups.values()) {
+    const center = new THREE.Vector3();
+    items.forEach((p) => center.add(v.set(p.x, p.y, p.z)));
+    center.divideScalar(items.length);
+    const meshes = [];
+    for (const part of parts) {
+      if (!part.geo) continue;
+      const im = new THREE.InstancedMesh(part.geo, part.mat, items.length);
+      items.forEach((p, i) => {
+        e.set(p.tilt || 0, p.ry, p.tilt2 || 0);
+        im.setMatrixAt(i, m.compose(v.set(p.x, p.y, p.z), q.setFromEuler(e), s.set(p.s, p.s * (p.sy || 1), p.s)));
+        if (part.tint) im.setColorAt(i, c.setRGB(p.tint, p.tint, p.tint * (p.blue || 1)));
+      });
+      im.computeBoundingSphere();
+      im.castShadow = part.shadow !== false;
+      im.receiveShadow = true;
+      if (part.depth) im.customDepthMaterial = part.depth;
+      if (part.reflect) im.layers.enable(1);
+      scene.add(im);
+      meshes.push(im);
+    }
+    chunks.push({ center, meshes, far });
+  }
+  return chunks;
+}
+
+// kinds: pine, cypress, olive, oak, palm, bush
+export function createFlora(scene, plants) {
+  const r = rng(404);
+  const chunks = [];
+  const make = (gen, seeds, sway, flutter, kindTex) => seeds.map((sd) => {
+    const t = gen(sd);
+    return t;
+  });
+  const kinds = {
+    pine: { gen: stonePine, seeds: [11, 12, 13], sway: "0.0032", flutter: "0.03", tex: "needle", cell: 120, far: 1400 },
+    cypress: { gen: cypress, seeds: [21, 22, 23], sway: "0.0034", flutter: "0.02", tex: "scale", cell: 120, far: 1400 },
+    olive: { gen: (s) => olive(s), seeds: [31, 32, 33], sway: "0.006", flutter: "0.035", tex: "leafy", cell: 120, far: 900 },
+    oak: { gen: (s) => olive(s, "oak"), seeds: [41, 42], sway: "0.004", flutter: "0.03", tex: "leafy", cell: 160, far: 1800 },
+    palm: { gen: palm, seeds: [51, 52], sway: "0.006", flutter: "0.02", tex: "frond", cell: 120, far: 900 },
+  };
+  for (const [kind, k] of Object.entries(kinds)) {
+    const list = plants.filter((p) => p.kind === kind);
+    if (!list.length) continue;
+    const variants = make(k.gen, k.seeds);
+    const leaf = leafMaterial(k.tex, k.sway, k.flutter);
+    const bark = barkMaterial(k.sway);
+    variants.forEach((tv, vi) => {
+      const mine = list.filter((_, i) => i % variants.length === vi);
+      chunks.push(...patches(scene, [
+        { geo: tv.wood, mat: bark, reflect: true },
+        { geo: tv.leaves, mat: leaf.mat, depth: leaf.depth, tint: true, reflect: true },
+      ], mine, k.cell, k.far));
+    });
+  }
+  // Bushes, plain and in flower
+  const bushes = plants.filter((p) => p.kind === "bush");
+  if (bushes.length) {
+    const leaf = leafMaterial("leafy", "0.03", "0.02");
+    const flowers = [null, null, null, "#d9538c", "#f1ede0", "#e8c240", "#b46fd0"];
+    const variants = flowers.map((f, i) => bush(61 + i, f));
+    variants.forEach((v, vi) => {
+      const mine = bushes.filter((p) => (p.flower ? 3 + (p.flower - 1) % 4 : Math.floor(p.v * 3)) === vi);
+      if (mine.length) chunks.push(...patches(scene, [{ geo: v.leaves, mat: leaf.mat, depth: leaf.depth, tint: true }], mine, 90, 420));
+    });
+  }
+  // The far hills: dark round trees, just masses of colour at that distance
+  const woods = plants.filter((p) => p.kind === "far");
+  if (woods.length) {
+    const g = new THREE.IcosahedronGeometry(1, 1);
+    const p = g.attributes.position, cc = new Float32Array(p.count * 3);
+    for (let i = 0; i < p.count; i++) { const k = 0.7 + 0.3 * (p.getY(i) * 0.5 + 0.5); cc.set([k, k, k], i * 3); }
+    g.setAttribute("color", new THREE.BufferAttribute(cc, 3));
+    g.translate(0, 0.8, 0);
+    const mat = stylize(new THREE.MeshLambertMaterial({ vertexColors: true, color: "#46613a" }), { key: "far-woods", defines: { WRAP: "0.4" } });
+    chunks.push(...patches(scene, [{ geo: g, mat, tint: true, shadow: false, reflect: true }], woods, 400, 6000));
+  }
+  return {
+    chunks,
+    update(cam) {
+      for (const c of chunks) {
+        const vis = c.center.distanceTo(cam) < c.far;
+        for (const m of c.meshes) m.visible = vis;
+      }
+    },
+  };
+}
+
+// ------------------------------------------------------------------ grass
+// Two fields of blades that travel with you, one fine and close, one coarse
+// out to the middle distance. Each blade finds the ground under it, and how
+// thick the grass is there, from the ground data.
+const GRASS_COLORS = {
+  cDryB: { value: C("#5f5a2f") }, cDryT: { value: C("#c4b56f") }, cGrnB: { value: C("#2e4a26") }, cGrnT: { value: C("#8cab58") },
+};
+export function createGrass() {
+  const make = (count, size, segs, o) => {
+    const pos = [], idx = [];
+    for (let i = 0; i < segs; i++) {
+      const t = i / segs;
+      pos.push(-1, t, 0, 1, t, 0);
+    }
+    pos.push(0, 1, 0);
+    for (let i = 0; i < segs - 1; i++) {
+      const a = i * 2;
+      idx.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+    }
+    const a = (segs - 1) * 2;
+    idx.push(a, a + 1, a + 2);
+    const g = new THREE.InstancedBufferGeometry();
+    g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+    g.setAttribute("normal", new THREE.Float32BufferAttribute(pos.map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
+    g.setIndex(idx);
+    const r = rng(o.seed);
+    const data = new Float32Array(count * 4);
+    const side = Math.ceil(Math.sqrt(count));
+    for (let i = 0; i < count; i++) {
+      data[i * 4] = ((i % side) + r()) / side;
+      data[i * 4 + 1] = (Math.floor(i / side) + r()) / side;
+      data[i * 4 + 2] = r();
+      data[i * 4 + 3] = r();
+    }
+    // Shuffle, so drawing fewer of them thins the grass evenly
+    for (let i = count - 1; i > 0; i--) {
+      const j = Math.floor(r() * (i + 1));
+      for (let k = 0; k < 4; k++) { const t = data[i * 4 + k]; data[i * 4 + k] = data[j * 4 + k]; data[j * 4 + k] = t; }
+    }
+    g.setAttribute("aBlade", new THREE.InstancedBufferAttribute(data, 4));
+    g.instanceCount = count;
+    g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
+    const uniforms = {
+      ...GRASS_COLORS,
+      uTile: { value: new THREE.Vector4(0, 0, size, 0) },
+      uFade: { value: new THREE.Vector4(...o.fade) },
+      uDims: { value: new THREE.Vector4(o.width, o.height, o.flowers, o.lean) },
+    };
+    const mat = stylize(new THREE.MeshLambertMaterial({ side: THREE.DoubleSide }), {
+      key: `grass-${o.seed}`,
+      defines: { FOLIAGE: "0.45", WRAP: "0.6" },
+      uniforms,
+      noiseVertex: true,
+      vertexPars: /* glsl */ `
+        attribute vec4 aBlade;
+        uniform vec4 uTile, uFade, uDims;
+        uniform vec3 cDryB, cDryT, cGrnB, cGrnT;
+        varying vec3 vGrassCol;
+        ${GROUND}`,
+      vertexHead: /* glsl */ `
+        vec2 rel = aBlade.xy * uTile.z - uTile.xy;
+        rel -= uTile.z * floor(rel / uTile.z + 0.5);
+        vec2 root = uTile.xy + rel;
+        float dist = length(root - cameraPosition.xz);
+        vec4 gd = groundData(root);
+        float clump = smoothstep(0.2, 0.75, vnoise(root * 0.85 + 3.)) * 1.35;
+        float dens = gd.g * mix(0.45, 1.25, clump);
+        float fade = smoothstep(uFade.x, uFade.y, dist) * (1. - smoothstep(uFade.z, uFade.w, dist));
+        float keep = smoothstep(aBlade.z, aBlade.z + 0.08, dens) * fade;
+        float fl = step(1. - uDims.z * (0.2 + 1.6 * smoothstep(0.45, 0.8, vnoise(root * 0.07 + 11.))), fract(aBlade.w * 13.7)) * step(0.1, gd.g);
+        float hgt = uDims.y * gd.b * (0.55 + 0.9 * fract(aBlade.w * 7.31)) * keep * (1. + fl * 0.3);
+        float ang = aBlade.w * 6.2831;
+        vec2 face = vec2(cos(ang), sin(ang));
+        vec2 across = vec2(-face.y, face.x);
+        float t = position.y, s = position.x;
+        float gust = vnoise(root * 0.045 - uWind * uTime * 0.7) * 0.65 + vnoise(root * 0.14 - uWind * uTime * 1.3) * 0.35;
+        float wave = sin(dot(root, uWind) * 0.3 - uTime * 2.4 + gust * 3.);
+        vec2 lean = uWind * uGust * (0.1 + 0.85 * gust * gust) * (0.75 + 0.25 * wave) + face * uDims.w;
+        vec2 away = root - uPlayer.xz;
+        float pd = length(away);
+        float push = (1. - smoothstep(0.25, 1.3, pd)) * (1. - smoothstep(0.6, 1.8, abs(uPlayer.y - gd.r)));
+        lean += away / max(pd, 0.05) * push * 1.8;
+        float bl = length(lean);
+        float w = uDims.x * (1. - t * t * 0.8) * (0.7 + 0.6 * aBlade.z);
+        float ty = t;
+        if (fl > 0.5) {
+          // a flower: a thin stalk, and a small round head on top
+          w = t > 0.6 ? 0.03 * (t > 0.95 ? 0.4 : 1.) : 0.005;
+          ty = t <= 0.5 ? t * 1.6 : 0.8 + (t - 0.5) * 0.4;
+        }
+        vec3 gPos = vec3(root.x, gd.r - 0.05, root.y);
+        gPos.xz += across * s * w * step(0.001, hgt);
+        gPos.y += hgt * ty / (1. + bl * bl * 0.35);
+        gPos.xz += lean * hgt * t * t;
+        vec3 objectNormal = normalize(vec3(face.x * 0.25 + lean.x * 0.35, 1., face.y * 0.25 + lean.y * 0.35));
+        vec3 base = mix(cDryB, cGrnB, gd.a), tip = mix(cDryT, cGrnT, gd.a);
+        vGrassCol = mix(base, tip, smoothstep(0., 1., t)) * (0.82 + 0.36 * fract(aBlade.w * 3.3)) * (1. + gust * 0.22);
+        if (fl > 0.5 && t > 0.6) {
+          float k = fract(aBlade.w * 29.1);
+          vGrassCol = k < 0.3 ? vec3(0.9, 0.86, 0.75) : k < 0.5 ? vec3(0.95, 0.62, 0.08) : k < 0.68 ? vec3(0.8, 0.07, 0.03) : k < 0.86 ? vec3(0.42, 0.28, 0.75) : vec3(0.85, 0.3, 0.5);
+        }`,
+      vertexBegin: "vec3 transformed = gPos;",
+      fragmentPars: "varying vec3 vGrassCol;",
+      color: "diffuseColor.rgb = vGrassCol;",
+      normal: "normal = normalize(vNormal);",
+    });
+    const mesh = new THREE.Mesh(g, mat);
+    mesh.frustumCulled = false;
+    mesh.receiveShadow = true;
+    mesh.userData.full = count;
+    return { mesh, uniforms };
+  };
+  const near = make(90000, 36, 4, { seed: 7, fade: [-1, 0, 12, 17], width: 0.034, height: 0.5, flowers: 0.03, lean: 0.12 });
+  const far = make(70000, 140, 3, { seed: 8, fade: [11, 16, 46, 66], width: 0.1, height: 0.55, flowers: 0.02, lean: 0.12 });
+  return {
+    meshes: [near.mesh, far.mesh],
+    update(cam) {
+      near.uniforms.uTile.value.x = far.uniforms.uTile.value.x = cam.x;
+      near.uniforms.uTile.value.y = far.uniforms.uTile.value.y = cam.z;
+    },
+    set density(k) {
+      for (const m of [near.mesh, far.mesh]) m.geometry.instanceCount = Math.floor(m.userData.full * k);
+    },
+  };
+}

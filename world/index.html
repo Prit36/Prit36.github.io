@@ -1,0 +1,71 @@
+<!doctype html>
+<!-- The bay from the banner, as a place. Hand-written, no build step; three.js
+     draws it, with its own light, haze, water and grass. -->
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <title>The Bay · Prit Prajapati</title>
+  <meta name="description" content="Walk around inside the painting from the top of Prit Prajapati's page. It keeps Surat's hours, and eleven paper lanterns are waiting to be lit.">
+  <meta property="og:title" content="The Bay">
+  <meta property="og:description" content="Walk around inside the painting. It keeps Surat's hours.">
+  <meta name="theme-color" content="#131312">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&display=swap">
+  <link rel="stylesheet" href="world.css">
+  <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js" } }</script>
+</head>
+<body>
+  <canvas id="world" tabindex="-1"></canvas>
+
+  <div class="hud" id="hud" hidden>
+    <p class="chip clock mono" id="clock"></p>
+    <div class="compass mono" id="compass" aria-hidden="true"></div>
+    <div class="chip tally mono" id="tally"><span id="tally-text"></span><span class="dots" id="dots"></span></div>
+    <i class="aim" id="aim"></i>
+    <p class="toast mono" id="toast" role="status"></p>
+    <button class="chip prompt mono" id="prompt" type="button" hidden></button>
+    <article class="card" id="card" hidden>
+      <p class="card-kicker mono" id="card-kicker"></p>
+      <h2 class="card-title" id="card-title"></h2>
+      <p class="card-body" id="card-body"></p>
+      <p class="card-foot mono" id="card-foot"></p>
+    </article>
+    <div class="touch" id="touch" hidden>
+      <div class="stick" id="stick"><i></i></div>
+      <button class="chip mono" id="t-jump" type="button">Jump</button>
+      <button class="chip mono" id="t-hours" type="button">+1 h</button>
+      <button class="chip mono" id="t-map" type="button">Map</button>
+    </div>
+  </div>
+
+  <div class="map-wrap" id="map-wrap" hidden><canvas class="map" id="map" width="900" height="900"></canvas></div>
+
+  <section class="intro" id="intro">
+    <div class="intro-card">
+      <p class="kicker mono">Prit Prajapati · <a href="../">back to the page</a></p>
+      <h1>Step into the painting</h1>
+      <p class="lede">The bay from the banner on my page, as a place you can walk around. It keeps Surat's hours, the way the banner does: right now it is <span id="intro-time">some hour</span>.</p>
+      <p class="lede">Eleven paper lanterns are hidden around the bay, one for each project I've built this year. Find them and light them.</p>
+      <button class="go" id="go" type="button" disabled>Painting the bay…</button>
+      <p class="error mono" id="error" hidden></p>
+      <dl class="keys mono" id="keys">
+        <div><dt>Mouse</dt><dd>look around</dd></div>
+        <div><dt>W A S D</dt><dd>walk, Shift to run</dd></div>
+        <div><dt>Space</dt><dd>jump; hold it in the air to float down under a parasol</dd></div>
+        <div><dt>E</dt><dd>light a lantern, climb a tower, row the boat, swing, stroke a cat</dd></div>
+        <div><dt>Click</dt><dd>skip a stone</dd></div>
+        <div><dt>Scroll</dt><dd>turn the hours; N for now, T to watch a whole day</dd></div>
+        <div><dt>Tab</dt><dd>map</dd></div>
+        <div><dt>M · H</dt><dd>sound · hide all this</dd></div>
+      </dl>
+      <p class="small mono"><button class="link" id="reset" type="button" hidden>Put the lanterns out and start again</button></p>
+    </div>
+  </section>
+
+  <noscript><p class="noscript">The bay needs JavaScript. <a href="../">Back to the page</a>.</p></noscript>
+  <script type="module" src="main.js"></script>
+</body>
+</html>
