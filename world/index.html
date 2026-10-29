@@ -38,10 +38,21 @@
       <button class="chip mono" id="t-jump" type="button">Jump</button>
       <button class="chip mono" id="t-hours" type="button">+1 h</button>
       <button class="chip mono" id="t-map" type="button">Map</button>
+      <button class="chip mono" id="t-card" type="button">Postcard</button>
     </div>
   </div>
 
   <div class="map-wrap" id="map-wrap" hidden><canvas class="map" id="map" width="900" height="900"></canvas></div>
+
+  <div class="postcard" id="postcard" hidden>
+    <figure class="postcard-card">
+      <img id="postcard-img" alt="A postcard of the bay, painted from where you stood">
+      <figcaption class="postcard-bar mono">
+        <a class="chip" id="postcard-save" href="#" download="the-bay.jpg">Save the postcard</a>
+        <button class="chip" id="postcard-close" type="button">Back to the bay</button>
+      </figcaption>
+    </figure>
+  </div>
 
   <section class="intro" id="intro">
     <div class="intro-card">
@@ -55,9 +66,10 @@
         <div><dt>Mouse</dt><dd>look around</dd></div>
         <div><dt>W A S D</dt><dd>walk, Shift to run</dd></div>
         <div><dt>Space</dt><dd>jump; hold it in the air to float down under a parasol</dd></div>
-        <div><dt>E</dt><dd>light a lantern, climb a tower, row the boat, swing, stroke a cat</dd></div>
+        <div><dt>E</dt><dd>light a lantern, climb a tower, row the boat, fly the balloon, set off the fireworks, swing, stroke a cat</dd></div>
         <div><dt>Click</dt><dd>skip a stone</dd></div>
         <div><dt>Scroll</dt><dd>turn the hours; N for now, T to watch a whole day</dd></div>
+        <div><dt>P</dt><dd>make a postcard of what you're looking at</dd></div>
         <div><dt>Tab</dt><dd>map</dd></div>
         <div><dt>M · H</dt><dd>sound · hide all this</dd></div>
       </dl>

@@ -323,7 +323,26 @@ export function createRanges() {
   geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
   geo.setIndex(idx);
   geo.computeVertexNormals();
-  const mat = stylize(new THREE.MeshLambertMaterial({ vertexColors: true }), { key: "ranges", defines: { WRAP: 0.2 } });
+  // Painted the way the far terrain is: spurs catching the light, forest
+  // dark in the folds, bare rock high up, all of it gone blue with distance
+  const mat = stylize(new THREE.MeshLambertMaterial({ vertexColors: true }), {
+    key: "ranges",
+    defines: { WRAP: 0.2 },
+    color: /* glsl */ `{
+      vec3 P = vWorldP;
+      float rid = 0.;
+      vec2 q = P.xz * 0.0011 + 3.;
+      float a = 0.5;
+      for (int i = 0; i < 5; i++) { float v = 1. - abs(vnoise(q) * 2. - 1.); rid += a * v * v; q = q * 2.1 + 5.3; a *= 0.5; }
+      gBump += (rid - 0.4) * 240.;
+      float slope = 1. - normalize(vWorldN).y;
+      float wood = smoothstep(0.42, 0.62, fbm2(P.xz * 0.0009) + (0.45 - rid) * 0.6);
+      vec3 c = mix(vec3(0.13, 0.2, 0.12), vec3(0.055, 0.1, 0.06), wood);
+      c = mix(c, vec3(0.3, 0.28, 0.27), clamp(smoothstep(0.55, 0.85, rid) * smoothstep(0.15, 0.45, slope) + smoothstep(800., 1500., P.y) * 0.7, 0., 1.));
+      c *= 0.72 + 0.5 * rid;
+      diffuseColor.rgb = c;
+    }`,
+  });
   const mesh = new THREE.Mesh(geo, mat);
   mesh.frustumCulled = false;
   mesh.layers.enable(1);

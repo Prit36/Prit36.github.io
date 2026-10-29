@@ -16,8 +16,10 @@ export const U = {
   uFogFalloff: { value: 0.0032 },
   uWind: { value: new THREE.Vector2(0.86, 0.5) },
   uGust: { value: 1 },
+  uLodScale: { value: 1 },
   uPlayer: { value: new THREE.Vector3() },
   tGround: { value: null },
+  tCover: { value: null },
   uGround: { value: new THREE.Vector4(0, 0, 1, 2) },
 };
 
@@ -76,7 +78,7 @@ export const FOG = /* glsl */ `
 // The height of the ground anywhere near the bay, so that things standing
 // on it can be darker where they meet it.
 export const GROUND = /* glsl */ `
-  uniform sampler2D tGround;
+  uniform sampler2D tGround, tCover;
   uniform vec4 uGround;
   float groundH(vec2 xz) {
     vec2 g = (xz - uGround.xy) / uGround.z;
@@ -94,6 +96,16 @@ export const GROUND = /* glsl */ `
     vec2 f = clamp(g - vec2(i), 0., 1.);
     vec4 a = texelFetch(tGround, i, 0), b = texelFetch(tGround, i + ivec2(1, 0), 0);
     vec4 c = texelFetch(tGround, i + ivec2(0, 1), 0), d = texelFetch(tGround, i + ivec2(1, 1), 0);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+  // wood, scrub, meadow
+  vec3 coverData(vec2 xz) {
+    vec2 g = (xz - uGround.xy) / uGround.z;
+    int n = int(uGround.w);
+    ivec2 i = clamp(ivec2(floor(g)), ivec2(0), ivec2(n - 2));
+    vec2 f = clamp(g - vec2(i), 0., 1.);
+    vec3 a = texelFetch(tCover, i, 0).rgb, b = texelFetch(tCover, i + ivec2(1, 0), 0).rgb;
+    vec3 c = texelFetch(tCover, i + ivec2(0, 1), 0).rgb, d = texelFetch(tCover, i + ivec2(1, 1), 0).rgb;
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
   }
 `;
@@ -161,8 +173,26 @@ const SWAY = /* glsl */ `
   #endif
 `;
 
+// Near and far versions of the same plants: the near one (leaf cards) is
+// drawn out to LOD_NEAR, the far one (soft lumps) from LOD_FAR, growing into
+// place over the last stretch so it doesn't pop.
+const LOD = /* glsl */ `
+  #if defined(USE_INSTANCING) && (defined(LOD_NEAR) || defined(LOD_FAR))
+  {
+    vec3 ipw = (modelMatrix * vec4(instanceMatrix[3].xyz, 1.)).xyz;
+    float ld = distance(ipw, cameraPosition) / uLodScale;
+    #ifdef LOD_NEAR
+      transformed *= step(ld, float(LOD_NEAR));
+    #endif
+    #ifdef LOD_FAR
+      transformed *= step(float(LOD_FAR) - 24., ld) * mix(0.8, 1., smoothstep(float(LOD_FAR) - 24., float(LOD_FAR), ld));
+    #endif
+  }
+  #endif
+`;
+
 const VERTEX_PARS = /* glsl */ `
-  uniform float uTime, uGust;
+  uniform float uTime, uGust, uLodScale;
   uniform vec2 uWind;
   uniform vec3 uPlayer;
   varying vec3 vWorldP, vWorldN;
@@ -188,7 +218,8 @@ ${o.vertexPars || ""}`)
       .replace("#include <beginnormal_vertex>", o.vertexHead ? o.vertexHead : "#include <beginnormal_vertex>")
       .replace("#include <begin_vertex>", o.vertexBegin ? o.vertexBegin : `#include <begin_vertex>
 ${SWAY}
-${o.vertex || ""}`)
+${o.vertex || ""}
+${LOD}`)
       .replace("#include <project_vertex>", `#include <project_vertex>
 {
   vec4 wp = vec4(transformed, 1.);

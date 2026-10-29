@@ -2,9 +2,11 @@ import * as THREE from "three";
 import { heightAt, groundAt, pushOut, field, buildTerrain, smooth, PATHS, STEP_UP, ISLANDS, rng } from "./land.js";
 import { lightOf, palette, createSky, createClouds, createRanges, PHASES, sunAt } from "./sky.js";
 import { createWater, createRipples } from "./water.js";
-import { buildWorld, createWindows, createGlows } from "./build.js";
+import { buildWorld, createWindows, createGlows, createBulbs } from "./build.js";
 import { createFlora, createGrass } from "./flora.js";
-import { createGulls, createButterflies, createMotes, createFireflies, createFish, createStones, createBall, createCats } from "./life.js";
+import { createGulls, createButterflies, createMotes, createFireflies, createFish, createStones, createBall, createCats, createDolphins } from "./life.js";
+import { createFireworks } from "./fx.js";
+import { createBalloon } from "./balloon.js";
 import { createPost } from "./post.js";
 import { createSound } from "./sound.js";
 import { U, stylize, toonish } from "./style.js";
@@ -81,6 +83,7 @@ const windows = createWindows(world.windows);
 scene.add(windows.mesh);
 const glows = createGlows(world.glows);
 scene.add(glows.mesh);
+scene.add(createBulbs(world.bulbs).mesh);
 const flora = createFlora(scene, world.plants);
 const grass = createGrass();
 scene.add(...grass.meshes);
@@ -107,6 +110,37 @@ const cats = createCats([[212, 0], [236, -28], [184, -38], [198, -64]].map(([x, 
 }));
 scene.add(cats.group);
 const sound = createSound();
+const dolphins = createDolphins();
+scene.add(dolphins.mesh);
+// Fireworks go up from a raft in the middle of the cove
+const fireworks = createFireworks();
+scene.add(fireworks.group);
+const SHOW = { x: -10, z: -40 };
+let showNight = -1;
+{
+  const raft = new THREE.Group();
+  const deck = new THREE.Mesh(new THREE.BoxGeometry(4, 0.3, 4), toonish("#8a6646"));
+  deck.position.y = 0.1;
+  raft.add(deck);
+  for (const [x, z] of [[-1, -1], [1, 0.6], [0.2, -0.9]]) {
+    const crate = new THREE.Mesh(new THREE.BoxGeometry(0.7, 0.6, 0.7), toonish("#b8453a"));
+    crate.position.set(x, 0.55, z);
+    raft.add(crate);
+  }
+  raft.position.set(SHOW.x, 0, SHOW.z);
+  raft.traverse((o) => { o.castShadow = true; o.layers.enable(1); });
+  scene.add(raft);
+  SHOW.raft = raft;
+}
+const fireworkEvents = {
+  launch: (p) => sound.launch(camera.position.distanceTo(tmpV.set(...p))),
+  boom: (p, crackle) => sound.boom(camera.position.distanceTo(tmpV.set(...p)), crackle),
+};
+const dolphinEvents = {
+  splash: (x, z, s) => { ripples.add(x, z, s, 0.5, 1.6); ripples.add(x, z, s * 0.5, 0.4, 1.1); },
+  call: (p) => sound.dolphin(camera.position.distanceTo(p)),
+};
+const tmpV = new THREE.Vector3();
 
 // Fireflies, in the olive terraces and the gardens
 const fireflies = createFireflies((() => {
@@ -407,6 +441,17 @@ const swing = (() => {
 })();
 const seatWorld = (v = new THREE.Vector3()) => swing.seat.getWorldPosition(v);
 
+// ------------------------------------------------------------------ the balloon
+// Tethered in the meadow above the beach. Space fires the burner, Shift
+// lets air out, W A S D drift her with what breeze there is up there.
+const BAL = (() => {
+  const b = createBalloon();
+  const [x, y, z] = places.balloon;
+  b.group.position.set(x, y, z);
+  scene.add(b.group);
+  return { ...b, x, y, z, vx: 0, vy: 0, vz: 0, heat: 0, glow: 0 };
+})();
+
 // ------------------------------------------------------------------ time
 // Minutes the sky has been turned away from now.
 let skew = Number(new URLSearchParams(location.search).get("skew")) || 0;
@@ -440,7 +485,7 @@ const P = {
   yaw: 1.12, pitch: -0.06,
   grounded: true, swimming: false, gliding: false, on: null,
   stride: 0, lastStep: 0, dip: 0, airTime: 0, fov: camera.fov,
-  boat: null, swing: false, scope: false,
+  boat: null, swing: false, scope: false, balloon: false,
 };
 const keys = new Set();
 let jumpQueued = false;
@@ -473,6 +518,7 @@ const WATER_FEET = -1.25;
 function movePlayer(dt) {
   if (P.boat) return rowBoat(dt);
   if (P.swing) return swingAbout(dt);
+  if (P.balloon) return flyBalloon(dt);
   if (P.scope) return;
   const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw), rx = Math.cos(P.yaw), rz = -Math.sin(P.yaw);
   const [ix, iz] = input();
@@ -694,16 +740,70 @@ const leaveSwing = () => {
   swing.om *= 0.3;
 };
 
+function flyBalloon(dt) {
+  const b = BAL;
+  const burn = keys.has("Space") || touchJump;
+  const vent = keys.has("ShiftLeft") || keys.has("ShiftRight");
+  jumpQueued = false;
+  b.heat += ((burn ? 1 : 0) - b.heat) * Math.min(1, dt * 0.8);
+  const ground = Math.max(groundAt(b.x, b.z, b.y + 0.5).y, 0.15);
+  b.vy += ((b.heat - 0.4) * 3.4 - (vent ? 1.6 : 0)) * dt;
+  b.vy *= Math.exp(-dt * 0.7);
+  b.vy = Math.max(-4.5, Math.min(5, b.vy));
+  b.y += b.vy * dt;
+  if (b.y > 340) { b.y = 340; b.vy = Math.min(0, b.vy); }
+  if (b.y <= ground) {
+    if (b.vy < -2) sound.step("wood");
+    b.y = ground;
+    b.vy = Math.max(0, b.vy);
+  }
+  // the breeze takes her, more the higher she is, and the keys lean on it
+  const aloft = smooth(1.5, 30, b.y - ground);
+  const [ix, iz] = input();
+  const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw), rx = Math.cos(P.yaw), rz = -Math.sin(P.yaw);
+  const wx = (U.uWind.value.x * 2.2 + (fx * iz + rx * ix) * 3) * aloft, wz = (U.uWind.value.y * 2.2 + (fz * iz + rz * ix) * 3) * aloft;
+  b.vx += (wx - b.vx) * Math.min(1, dt * 0.5);
+  b.vz += (wz - b.vz) * Math.min(1, dt * 0.5);
+  b.x += b.vx * dt;
+  b.z += b.vz * dt;
+  const fromMid = Math.hypot(b.x + 40, b.z + 40);
+  if (fromMid > 1150) {
+    const k = (fromMid - 1150) / fromMid;
+    b.x -= (b.x + 40) * k; b.z -= (b.z + 40) * k;
+    toast("The painting ends a little further out.");
+  }
+  b.y = Math.max(b.y, groundAt(b.x, b.z, b.y + 0.5).y);
+  P.pos.set(b.x, b.y + 0.05, b.z);
+  P.vel.set(b.vx, b.vy, b.vz);
+  sound.burner(burn);
+}
+const boardBalloon = () => teleport(BAL.x, BAL.y + 0.05, BAL.z, P.yaw, () => {
+  P.balloon = true;
+  toast("Hold Space for the burner, Shift to let air out, W A S D to drift. E to step out once you're down.", 6500);
+});
+const leaveBalloon = () => {
+  const b = BAL;
+  const ground = groundAt(b.x, b.z, b.y + 0.5).y;
+  if (b.y - Math.max(ground, 0.15) > 1.2) { toast("Let the burner rest and she'll come down. Step out once you've landed."); return; }
+  P.balloon = false;
+  sound.burner(false);
+  const x = b.x - Math.sin(P.yaw) * 2.2, z = b.z - Math.cos(P.yaw) * 2.2;
+  P.pos.set(x, Math.max(groundAt(x, z).y, WATER_FEET), z);
+  P.vel.set(0, 0, 0);
+  P.grounded = true;
+};
+
 function placeCamera(dt, t) {
   const speed = Math.hypot(P.vel.x, P.vel.z);
   let eye = P.swimming ? WATER_FEET + 1.6 + Math.sin(t * 1.7) * 0.07 : P.pos.y + 1.62;
   if (P.boat) eye = 0.35 + 0.95 + Math.sin(t * 1.1 + 1.3) * 0.06;
   if (P.swing) eye = P.pos.y + 1.0;
+  if (P.balloon) eye = P.pos.y + 1.55;
   if (P.scope) {
     const tp = places.telescope;
     camera.position.set(tp.x, tp.y + 1.45, tp.z);
   } else {
-    if ((P.grounded || P.swimming) && speed > 0.5 && !P.boat) {
+    if ((P.grounded || P.swimming) && speed > 0.5 && !P.boat && !P.balloon) {
       P.stride += speed * dt;
       eye += Math.sin(P.stride * 2.1) * 0.045 * Math.min(1, speed / 5);
       const stepLen = P.swimming ? 2.4 : speed > 7 ? 2.2 : 1.5;
@@ -860,6 +960,8 @@ function paintMapBase() {
   label("the lookout & swing", -20, -290, 14, 6);
   label("the quarry", 96, -322, 14, 6);
   label("the islet", ISLANDS[0][0], ISLANDS[0][1], -30, 44);
+  label("the windmill", places.windmill[0], places.windmill[2], 14, 6);
+  label("the chapel", places.chapel[0], places.chapel[2], 14, 6);
   label("a boat", rowboat.x, rowboat.z, -22, 30);
   g.font = "italic 40px Newsreader, Georgia, serif";
   g.fillStyle = "rgba(30, 60, 110, 0.55)";
@@ -891,6 +993,19 @@ const drawMap = () => {
     mapPen.strokeStyle = "#7a4a1f";
     mapPen.stroke();
   }
+  {
+    // where the balloon is now
+    const [bu, bv] = toMap(BAL.x, BAL.z);
+    mapPen.beginPath();
+    mapPen.ellipse(bu, bv - 9, 8, 10, 0, 0, Math.PI * 2);
+    mapPen.fillStyle = "#d0663f";
+    mapPen.fill();
+    mapPen.fillStyle = "#7a4a1f";
+    mapPen.fillRect(bu - 3, bv + 2, 6, 5);
+    mapPen.font = "italic 20px Newsreader, Georgia, serif";
+    mapPen.fillStyle = "#3b3226";
+    mapPen.fillText("the balloon", bu + 14, bv);
+  }
   const [u, v] = toMap(P.pos.x, P.pos.z);
   mapPen.save();
   mapPen.translate(u, v);
@@ -905,6 +1020,107 @@ const drawMap = () => {
   mapPen.fill();
   mapPen.restore();
 };
+
+// ------------------------------------------------------------------ postcards
+// P turns the view into a postcard: the picture with a paper border, a
+// stamp cut from the picture itself, a postmark, and a line written on it.
+const pcEl = $("postcard"), pcImg = $("postcard-img"), pcSave = $("postcard-save");
+let postcardOpen = false, shotWanted = false, pcUrl = null;
+const PAPER = "#f4f0e4";
+function makePostcard() {
+  const W = 1800, H = 1200, B = 56;
+  const out = document.createElement("canvas");
+  out.width = W; out.height = H;
+  const g = out.getContext("2d");
+  g.fillStyle = PAPER;
+  g.fillRect(0, 0, W, H);
+  // the view, cut to the card's shape
+  const sw = canvas.width, sh = canvas.height;
+  let cw = sw, ch = sw / 1.5;
+  if (ch > sh) { ch = sh; cw = sh * 1.5; }
+  const ix = B, iy = B, iw = W - 2 * B, ih = H - 2 * B;
+  g.drawImage(canvas, (sw - cw) / 2, (sh - ch) / 2, cw, ch, ix, iy, iw, ih);
+  g.strokeStyle = "rgba(60, 50, 40, 0.22)";
+  g.lineWidth = 2;
+  g.strokeRect(ix - 12, iy - 12, iw + 24, ih + 24);
+  // the stamp: a corner of the same view, with a perforated edge
+  const stamp = document.createElement("canvas");
+  const SW = 190, SH = 230, S2 = 14;
+  stamp.width = SW; stamp.height = SH;
+  const s = stamp.getContext("2d");
+  s.fillStyle = "#fbf8f0";
+  s.fillRect(0, 0, SW, SH);
+  s.drawImage(canvas, sw * 0.5 - cw * 0.1, sh * 0.62 - cw * 0.12, cw * 0.2, cw * 0.24, S2, S2, SW - 2 * S2, SH - 2 * S2 - 34);
+  s.fillStyle = "#3b3226";
+  s.font = "italic 600 26px Newsreader, Georgia, serif";
+  s.fillText("The Bay", S2 + 4, SH - S2 - 8);
+  s.font = "500 20px 'IBM Plex Mono', monospace";
+  s.textAlign = "right";
+  s.fillText("₹5", SW - S2 - 2, SH - S2 - 10);
+  s.globalCompositeOperation = "destination-out";
+  for (let x = 0; x <= SW; x += 15) for (const y of [0, SH]) { s.beginPath(); s.arc(x, y, 5, 0, Math.PI * 2); s.fill(); }
+  for (let y = 0; y <= SH; y += 15) for (const x of [0, SW]) { s.beginPath(); s.arc(x, y, 5, 0, Math.PI * 2); s.fill(); }
+  const stx = ix + iw - SW - 36, sty = iy + 34;
+  g.save();
+  g.shadowColor = "rgba(0, 0, 0, 0.25)";
+  g.shadowBlur = 12;
+  g.shadowOffsetY = 3;
+  g.translate(stx + SW / 2, sty + SH / 2);
+  g.rotate(0.03);
+  g.drawImage(stamp, -SW / 2, -SH / 2);
+  g.restore();
+  // the postmark, half over the stamp
+  const now = new Date(Date.now() + skew * 6e4 + IST);
+  const [hh, mm] = hoursAt(Date.now() + skew * 6e4);
+  const months = ["JAN", "FEB", "MAR", "APR", "MAY", "JUN", "JUL", "AUG", "SEP", "OCT", "NOV", "DEC"];
+  const px = stx - 6, py = sty + SH - 40;
+  g.save();
+  g.strokeStyle = "rgba(40, 36, 60, 0.62)";
+  g.fillStyle = "rgba(40, 36, 60, 0.62)";
+  g.lineWidth = 4;
+  g.beginPath(); g.arc(px, py, 74, 0, Math.PI * 2); g.stroke();
+  g.lineWidth = 2;
+  g.beginPath(); g.arc(px, py, 58, 0, Math.PI * 2); g.stroke();
+  g.font = "600 21px 'IBM Plex Mono', monospace";
+  g.textAlign = "center";
+  g.fillText(`${now.getUTCDate()} ${months[now.getUTCMonth()]}`, px, py - 4);
+  g.fillText(`${two(hh)}:${two(mm)}`, px, py + 22);
+  g.lineWidth = 4;
+  for (let k = 0; k < 4; k++) {
+    g.beginPath();
+    for (let x = 0; x <= 230; x += 6) g.lineTo(px + 80 + x, py - 42 + k * 26 + Math.sin(x * 0.09) * 7);
+    g.stroke();
+  }
+  g.restore();
+  // the line written on it
+  g.save();
+  g.shadowColor = "rgba(10, 14, 30, 0.55)";
+  g.shadowBlur = 18;
+  g.fillStyle = "#fffaf0";
+  g.font = "italic 500 92px Newsreader, Georgia, serif";
+  g.fillText("Greetings from the Bay", ix + 46, iy + ih - 92);
+  g.font = "500 26px 'IBM Plex Mono', monospace";
+  g.fillText(describe(Date.now() + skew * 6e4).replace(" there", "").toUpperCase() + " IN SURAT · PRIT PRAJAPATI", ix + 52, iy + ih - 46);
+  g.restore();
+  out.toBlob((blob) => {
+    if (pcUrl) URL.revokeObjectURL(pcUrl);
+    pcUrl = URL.createObjectURL(blob);
+    pcImg.src = pcUrl;
+    pcSave.href = pcUrl;
+    pcSave.download = `the-bay-${two(hh)}${two(mm)}.jpg`;
+  }, "image/jpeg", 0.92);
+}
+const openPostcard = () => {
+  shotWanted = true;
+};
+const closePostcard = () => {
+  if (!postcardOpen) return;
+  postcardOpen = false;
+  pcEl.hidden = true;
+  hud.hidden = false;
+  if (!touch && !dragLook) canvas.requestPointerLock?.()?.catch?.(() => {});
+};
+$("postcard-close").addEventListener("click", closePostcard);
 
 // ------------------------------------------------------------------ doing things
 let post = null;
@@ -964,6 +1180,7 @@ function startFinale() {
   });
   setTimeout(() => ringBell(), 1500);
   setTimeout(() => sound.melody(), 4000);
+  setTimeout(() => fireworks.show(SHOW.x, SHOW.z, 30, 0.9), 9000);
   setTimeout(() => showCard("all eleven", "The bay is lit",
     "Every project from this year, floating over the water. Thank you for walking all the way round.",
     `<a href="../" style="color:inherit">back to the page</a> · <a href="https://github.com/Prit36" target="_blank" rel="noopener" style="color:inherit">github.com/Prit36</a>`, "https://github.com/Prit36", 20000), 5000);
@@ -982,7 +1199,7 @@ $("reset").addEventListener("click", () => {
   location.reload();
 });
 
-const free = () => !P.boat && !P.swing && !P.scope;
+const free = () => !P.boat && !P.swing && !P.scope && !P.balloon;
 const actions = [];
 for (const l of lanterns) {
   actions.push({ at: () => lanternWorld(l), r: 4.4, when: () => !l.lit && !l.rise && free(), label: "light the lantern", act: () => lightLantern(l) });
@@ -1008,6 +1225,13 @@ for (const l of lanterns) {
       toast("W and S row, A and D turn. E by the shore to step out.", 5000);
     }) });
   actions.push({ at: () => seatWorld().add(new THREE.Vector3(0, 0.5, 0)), r: 2.8, when: free, label: "sit on the swing", act: sitOnSwing });
+  actions.push({ at: () => new THREE.Vector3(BAL.x, BAL.y + 1.1, BAL.z), r: 3.6, when: free, label: "climb into the balloon", act: boardBalloon });
+  actions.push({ at: () => new THREE.Vector3(...places.fireworks), r: 2.6, when: () => free() && !fireworks.busy, label: "set off the fireworks",
+    act: () => {
+      fireworks.show(SHOW.x, SHOW.z, 16, 0.85);
+      sound.flame();
+      toast(L.night > 0.5 ? "Look up, over the cove" : "They'd show better after dark, but here they go", 3500);
+    } });
   const tp = places.telescope;
   actions.push({ at: () => new THREE.Vector3(tp.x, tp.y + 1.2, tp.z), r: 2.4, when: free, label: "look through the telescope",
     act: () => { P.scope = true; P.yaw = tp.yaw; P.pitch = -0.02; toast("Mouse to look, E to step back", 3500); } });
@@ -1030,7 +1254,8 @@ const findAction = () => {
   if (P.boat) { const spot = landing(); hint = spot ? (spot.pier ? "climb onto the pier" : "step ashore") : null; }
   else if (P.swing) hint = "step off the swing";
   else if (P.scope) hint = "step back";
-  if (hint || P.boat || P.swing || P.scope) {
+  else if (P.balloon) hint = BAL.y - Math.max(groundAt(BAL.x, BAL.z, BAL.y + 0.5).y, 0.15) < 1.2 ? "step out of the basket" : null;
+  if (hint || P.boat || P.swing || P.scope || P.balloon) {
     focused = null;
     const text = hint ? `<kbd>${touch ? "tap" : "E"}</kbd>${hint}` : "";
     if (text !== lastHint) { lastHint = text; promptEl.innerHTML = text; promptEl.hidden = !text; }
@@ -1060,6 +1285,7 @@ const act = () => {
   if (P.boat) { leaveBoat(); return; }
   if (P.swing) { leaveSwing(); return; }
   if (P.scope) { P.scope = false; return; }
+  if (P.balloon) { leaveBalloon(); return; }
   if (!focused) return;
   const a = focused;
   focused = null;
@@ -1152,7 +1378,7 @@ const pause = () => {
   setMap(false);
 };
 document.addEventListener("pointerlockchange", () => {
-  if (locked()) { dragLook = false; begin(); } else if (!dragLook) pause();
+  if (locked()) { dragLook = false; begin(); } else if (!dragLook && !postcardOpen) pause();
 });
 goBtn.addEventListener("click", enter);
 canvas.addEventListener("click", () => { if (!playing && !touch && started) enter(); });
@@ -1186,6 +1412,10 @@ document.addEventListener("wheel", (e) => {
   skew += Math.sign(e.deltaY) * (e.shiftKey ? 60 : 12);
 }, { passive: true });
 document.addEventListener("keydown", (e) => {
+  if (postcardOpen) {
+    if (e.code === "KeyP" || e.code === "Escape") { e.preventDefault(); closePostcard(); }
+    return;
+  }
   if (e.code === "Tab") { e.preventDefault(); if (playing) setMap(!mapOpen); return; }
   if (e.code === "Escape" && P.scope) { P.scope = false; return; }
   if (e.code === "Escape" && dragLook && playing) { pause(); return; }
@@ -1198,6 +1428,7 @@ document.addEventListener("keydown", (e) => {
   else if (e.code === "KeyT") { skew = wrap(skew); glideTo(skew + 1440, 24000, () => { skew = wrap(skew); }); toast("A whole day, in twenty-four seconds"); }
   else if (e.code === "KeyM") toast(sound.toggle() ? "Sound off" : "Sound on");
   else if (e.code === "KeyH") document.documentElement.classList.toggle("is-bare");
+  else if (e.code === "KeyP") openPostcard();
   else if (e.code === "KeyO" && cardLink) window.open(cardLink, "_blank", "noopener");
 });
 document.addEventListener("keyup", (e) => keys.delete(e.code));
@@ -1246,6 +1477,7 @@ if (touch) {
   jumpBtn.addEventListener("pointercancel", () => { touchJump = false; });
   $("t-hours").addEventListener("click", () => { glide = null; skew += 60; });
   $("t-map").addEventListener("click", () => setMap(!mapOpen));
+  $("t-card").addEventListener("click", openPostcard);
   promptEl.addEventListener("click", act);
 }
 
@@ -1269,6 +1501,8 @@ const setQuality = (q) => {
   quality = Math.max(0, Math.min(3, q));
   grass.density = [0.45, 0.65, 0.85, 1][quality];
   post.scale = [0.62, 0.75, 0.88, 1][quality];
+  flora.reach = [0.45, 0.6, 0.8, 1][quality];
+  U.uLodScale.value = [0.55, 0.7, 0.85, 1][quality];
 };
 setQuality(touch ? 1 : 3);
 
@@ -1384,7 +1618,14 @@ function frame(now) {
   fish.update(dt, P.pos, fishEvents);
   stones.update(dt, stoneEvents);
   ball.update(dt, P, ballEvents);
-  ripples.update(dt, 1 - night * 0.55);
+  ripples.update(dt, night);
+  // at night, swimming or rowing stirs up the glow behind you
+  if (night > 0.4 && (P.swimming || P.boat) && Math.hypot(P.vel.x, P.vel.z) > 0.6 && Math.random() < dt * 9) {
+    ripples.add(P.pos.x + (Math.random() - 0.5) * 1.6, P.pos.z + (Math.random() - 0.5) * 1.6, 0.35 + Math.random() * 0.3, 0.45, 1.3);
+  }
+  dolphins.update(dt, camera.position, P.yaw, dolphinEvents);
+  fireworks.uniforms.uScale.value = scale;
+  fireworks.update(dt, fireworkEvents);
   for (const b of world.boats) {
     if (b.kind === "sail") {
       b.phase += dt * b.sp;
@@ -1402,6 +1643,22 @@ function frame(now) {
     b.mesh.rotation.set(Math.sin(t * 0.9 + b.phase) * 0.03 - (P.boat ? b.speed * 0.006 : 0), b.heading, Math.sin(t * 0.7 + b.phase * 2) * 0.035, "YXZ");
   }
   board.k *= Math.exp(-dt * 3);
+  world.windmill.sails.rotation.z -= dt * (0.35 + 0.25 * U.uGust.value);
+  SHOW.raft.position.y = Math.sin(t * 1.1) * 0.06 - 0.05;
+  SHOW.raft.rotation.z = Math.sin(t * 0.8) * 0.03;
+  {
+    // the balloon: the flame and the glow it throws up into the envelope
+    const burning = P.balloon && (keys.has("Space") || touchJump);
+    if (!P.balloon) BAL.heat *= Math.exp(-dt * 0.5);
+    BAL.glow += ((burning ? 1 : 0) - BAL.glow) * Math.min(1, dt * 10);
+    BAL.group.position.set(BAL.x, BAL.y, BAL.z);
+    const up = smooth(1, 20, BAL.y - Math.max(heightAt(BAL.x, BAL.z), 0));
+    BAL.group.rotation.set(Math.sin(t * 0.43) * 0.02 * up, 0, Math.sin(t * 0.37 + 1) * 0.02 * up);
+    BAL.flame.visible = BAL.glow > 0.02;
+    BAL.flame.scale.set(1, (0.6 + 0.4 * Math.sin(t * 31) * Math.sin(t * 17)) * BAL.glow + 0.2, 1);
+    BAL.uBurn.value = BAL.glow * (0.4 + 0.6 * night) + 0.08 * night * (P.balloon ? 1 : 0);
+    BAL.uBase.value = BAL.y;
+  }
   if (!P.swing) {
     swing.om += (-9.8 / swing.L * Math.sin(swing.th) - 0.4 * swing.om) * dt;
     swing.th += swing.om * dt;
@@ -1415,6 +1672,11 @@ function frame(now) {
     strikes.shift();
   }
   const [h, m] = hoursAt(time);
+  // the bay's own show, at nine every evening
+  if (h === 21 && m < 2 && showNight !== new Date(time + IST).getUTCDate() && started) {
+    showNight = new Date(time + IST).getUTCDate();
+    fireworks.show(SHOW.x, SHOW.z, 22, 1.1);
+  }
   hourHand.rotation.z = -((h % 12) + m / 60) / 12 * Math.PI * 2;
   minuteHand.rotation.z = -(m / 60) * Math.PI * 2;
   // Stones ring the bell and push the ball
@@ -1459,7 +1721,7 @@ function frame(now) {
     const high = smooth(15, 80, P.pos.y - Math.max(0, heightAt(P.pos.x, P.pos.z)));
     sound.update(t, {
       shore: P.boat ? 0.7 : wet > 0 && wet < 8 ? 1 : wet === 8 ? 0.45 : 0.15,
-      high, wind: P.gliding ? 1 : P.swing ? Math.min(1, Math.abs(swing.om) * 0.5) : smooth(4, 12, Math.hypot(P.vel.x, P.vel.z)) * 0.3,
+      high, wind: P.gliding ? 1 : P.swing ? Math.min(1, Math.abs(swing.om) * 0.5) : P.balloon ? 0.25 * high : smooth(4, 12, Math.hypot(P.vel.x, P.vel.z)) * 0.3,
       day: 1 - night, night, trees: field(P.pos.x, P.pos.z).village > 0.1 || P.pos.y > 20 ? 1 : 0.4,
     });
   }
@@ -1484,6 +1746,21 @@ function frame(now) {
   if (quality > 0 || !touch) water.reflect(renderer, scene, camera, Math.max(1, Math.round(post.width * (quality > 1 ? 0.5 : 0.35))), Math.max(1, Math.round(post.height * (quality > 1 ? 0.5 : 0.35))));
   renderer.shadowMap.needsUpdate = true;
   post.render(scene, camera, sunWorld);
+  if (shotWanted) {
+    // read the picture now, while it's still in the canvas, then a flash
+    shotWanted = false;
+    makePostcard();
+    postcardOpen = true;
+    pcEl.hidden = false;
+    hud.hidden = true;
+    keys.clear();
+    sound.clack(0);
+    const f = post.final.uniforms.uFade;
+    f.value = 0.85;
+    const back = () => { f.value = Math.max(0, f.value - 0.06); if (f.value > 0) requestAnimationFrame(back); };
+    requestAnimationFrame(back);
+    if (locked()) document.exitPointerLock();
+  }
 
   // Keep the frame rate: draw less when it struggles, more when it doesn't
   if (dt > 1 / 38) slow += dt; else slow = Math.max(0, slow - dt * 0.5);
@@ -1499,7 +1776,8 @@ goBtn.textContent = "Walk in";
 // For looking around while working on the bay: ?dev puts a handle on window.
 if (new URLSearchParams(location.search).has("dev")) {
   window.bay = {
-    P, camera, places, lanterns, post, actions, rowboat, swing, cats, world, U, renderer, scene, water,
+    P, camera, places, lanterns, post, actions, rowboat, swing, cats, world, U, renderer, scene, water, fireworks, dolphins, SHOW, BAL,
+    postcard: openPostcard,
     hour(m) { glide = null; skew = m; },
     at(h) { glide = null; const nowMin = ((Date.now() / 6e4) + 330) % 1440; skew = h * 60 - nowMin; },
     look(x, y, z, yaw, pitch = -0.1) { P.pos.set(x, y ?? groundAt(x, z).y, z); P.yaw = yaw; P.pitch = pitch; P.vel.set(0, 0, 0); P.grounded = true; P.swimming = false; },

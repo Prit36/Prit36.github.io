@@ -117,8 +117,15 @@ export function createWater(floorTex, floorRect) {
         float aBody = mix(1., mix(0.4, 0.88, smoothstep(0.1, 5.5, depth)), clear);
         aBody = mix(aBody, 1., smoothstep(120., 380., dist));
         // what it reflects
-        vec2 ruv = vRefl.xy / vRefl.w + vec2(N.x * 0.03, N.z * 0.05);
-        vec3 refl = texture2D(tRefl, ruv).rgb;
+        // far out, the swell breaks the mirror up and the haze takes it
+        float farR = smoothstep(150., 2200., dist);
+        vec2 ruv = vRefl.xy / vRefl.w + vec2(N.x * 0.03, N.z * 0.05) * (1. + farR * 2.5);
+        // smeared up and down the way a mirror on moving water is
+        float spread = 0.003 + 0.016 * smoothstep(20., 600., dist);
+        vec3 refl = texture2D(tRefl, ruv).rgb * 0.36
+          + (texture2D(tRefl, ruv + vec2(0., spread)).rgb + texture2D(tRefl, ruv - vec2(0., spread)).rgb) * 0.22
+          + (texture2D(tRefl, ruv + vec2(spread * 0.3, spread * 2.2)).rgb + texture2D(tRefl, ruv - vec2(spread * 0.3, spread * 2.2)).rgb) * 0.1;
+        refl = mix(refl, hazeColor(reflect(-V, vec3(0., 1., 0.))), farR * 0.55);
         float ndv = max(dot(N, V), 0.);
         float fres = clamp(0.03 + 0.62 * pow(1. - ndv, 4.), 0., 0.72) * uReflect;
         // sun (or moon) on the water: a hard core and broken sparkles
@@ -138,7 +145,11 @@ export function createWater(floorTex, floorRect) {
           foam = max(foam, smoothstep(0.6, 0.85, ob + (fn - 0.5) * 0.35) * 0.85 + smoothstep(0.2, 0.5, ob) * smoothstep(0.75, 0.95, ring) * 0.4 * fn);
         }
         foam = clamp(foam, 0., 1.) * (1. - smoothstep(60., 220., dist) * 0.7);
-        vec3 foamCol = uFoamCol * mix(1., 0.32, uNight);
+        // by night the breaking water glows blue-green, the way plankton does
+        float glowN = smoothstep(0.35, 0.85, uNight);
+        float flick = smoothstep(0.35, 0.9, vnoise(xz * 2.3 + vec2(t * 0.9, -t * 0.7)) * 0.7 + vnoise(xz * 7.1 - t * 1.3) * 0.3);
+        vec3 foamCol = mix(uFoamCol * mix(1., 0.32, uNight), vec3(0.12, 0.8, 1.05) * (0.08 + 0.75 * flick), glowN * 0.9);
+        foam *= mix(1., 0.35 + 0.65 * flick, glowN);
         // put it together, premultiplied so the reflection adds over what's under the water
         vec3 col = body * aBody * (1. - fres) + refl * fres + glint;
         float a = 1. - (1. - aBody) * (1. - fres);
@@ -245,7 +256,10 @@ export function createRipples(count = 64) {
     next = (next + 1) % count;
     Object.assign(r, { x, z, size, power, life, age: 0 });
   };
-  const update = (dt, dim) => {
+  // By night the rings glow blue-green: the plankton lighting up where the
+  // water's disturbed.
+  const update = (dt, night = 0) => {
+    const glow = Math.max(0, Math.min(1, (night - 0.3) / 0.5));
     rings.forEach((r, i) => {
       r.age += dt;
       const k = r.age / r.life;
@@ -256,8 +270,8 @@ export function createRipples(count = 64) {
         m.makeScale(s, 1, s).setPosition(r.x, 0.04, r.z);
       }
       mesh.setMatrixAt(i, m);
-      const a = k >= 1 ? 0 : r.power * (1 - k) ** 1.6 * dim;
-      mesh.setColorAt(i, c.setRGB(a, a, a));
+      const a = k >= 1 ? 0 : r.power * (1 - k) ** 1.6 * (1 - night * 0.55) * (1 + glow * 3.2);
+      mesh.setColorAt(i, c.setRGB(a * (1 - glow * 0.75), a * (1 - glow * 0.05), a * (1 + glow * 0.25)));
     });
     mesh.instanceMatrix.needsUpdate = true;
     mesh.instanceColor.needsUpdate = true;

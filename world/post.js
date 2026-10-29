@@ -93,7 +93,7 @@ const RADIAL = /* glsl */ `
 
 const FINAL = /* glsl */ `
   uniform sampler2D tScene, tBloom, tRays;
-  uniform float uExposure, uBloom, uRays, uTime, uFade, uSat, uVignette, uContrast;
+  uniform float uExposure, uBloom, uRays, uTime, uFade, uSat, uVignette, uContrast, uCanvas, uPixel;
   uniform vec3 uRayColor, uFadeColor, uShadowTint, uLightTint;
   varying vec2 vUv;
   float hash(vec2 p) { vec3 p3 = fract(vec3(p.xyx) * .1031); p3 += dot(p3, p3.yzx + 33.33); return fract((p3.x + p3.y) * p3.z); }
@@ -127,6 +127,14 @@ const FINAL = /* glsl */ `
     c *= 1. - uVignette * smoothstep(0.1, 0.75, dot(q, q) * 2.2);
     c = toSRGB(clamp(c, 0., 1.));
     c = mix(c, c * c * (3. - 2. * c), uContrast);
+    // the weave of the canvas, faintly, in the mid-tones: sharp, never a blur
+    {
+      vec2 p = gl_FragCoord.xy / max(uPixel, 1.);
+      float weave = sin(p.x * 1.9) * sin(p.y * 1.9 + sin(p.x * 0.37) * 1.3);
+      float tooth = hash(floor(p * 0.5)) - 0.5;
+      float mid = 1. - abs(dot(c, vec3(0.33)) * 2. - 1.);
+      c *= 1. + (weave * 0.018 + tooth * 0.022) * mid * uCanvas;
+    }
     c = mix(c, uFadeColor, uFade);
     c += (hash(gl_FragCoord.xy + fract(uTime * 7.13) * 91.) - 0.5) / 160.;
     gl_FragColor = vec4(c, 1.);
@@ -152,7 +160,7 @@ export function createPost(renderer) {
   const final = pass(FINAL, {
     tScene: { value: sceneRT.texture }, tBloom: { value: mips[0].texture }, tRays: { value: rayB.texture },
     uExposure: { value: 1 }, uBloom: { value: 0.6 }, uRays: { value: 0 }, uTime: { value: 0 }, uFade: { value: 0 },
-    uSat: { value: 1.06 }, uVignette: { value: 0.32 }, uContrast: { value: 0.08 },
+    uSat: { value: 1.06 }, uVignette: { value: 0.32 }, uContrast: { value: 0.08 }, uCanvas: { value: 1 }, uPixel: { value: 1 },
     uRayColor: { value: new THREE.Color("#ffe2b0") }, uFadeColor: { value: new THREE.Color("#f4f0e4") },
     uShadowTint: { value: new THREE.Color(0.95, 0.98, 1.06) }, uLightTint: { value: new THREE.Color(1.03, 1.0, 0.96) },
   });
@@ -177,6 +185,8 @@ export function createPost(renderer) {
     for (const m of mips) { w = Math.max(1, w >> 1); h = Math.max(1, h >> 1); m.setSize(w, h); }
     rayA.setSize(Math.max(1, width >> 2), Math.max(1, height >> 2));
     rayB.setSize(Math.max(1, width >> 2), Math.max(1, height >> 2));
+    // the canvas weave is laid in CSS pixels, so it's the same on any screen
+    final.uniforms.uPixel.value = Math.min(window.devicePixelRatio || 1, 1.5);
   };
 
   const sunScreen = new THREE.Vector3();

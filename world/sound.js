@@ -256,5 +256,43 @@ export function createSound() {
       PENTA.forEach((_, i) => this.chime(i, i * 0.32));
       [0, 2, 3, 5].forEach((n, i) => this.chime(n, 4 + i * 0.6));
     },
+    // A rocket going up: a rising hiss
+    launch(dist = 0) {
+      if (!ready()) return;
+      const f = burst("bandpass", 900, 2.5, 0.07 * far(dist / 4), 1.3);
+      f.frequency.exponentialRampToValueAtTime(3800, ctx.currentTime + 1.2);
+    },
+    // A shell bursting: the thump arrives later the further off it is,
+    // then the crackle of the stars
+    boom(dist = 0, crackle = false) {
+      if (!ready()) return;
+      const at = ctx.currentTime + dist / 343, k = 1 / (1 + dist / 120);
+      const o = tone(70, 0.5 * k, 1.4, "sine", at, 0.005);
+      o.frequency.exponentialRampToValueAtTime(34, at + 0.8);
+      const f = burst("lowpass", 900, 0.7, 0.45 * k, 1.1, at);
+      f.frequency.exponentialRampToValueAtTime(120, at + 0.9);
+      if (crackle) {
+        for (let i = 0; i < 26; i++) burst("highpass", 3000 + Math.random() * 3000, 1, 0.05 * k * Math.random(), 0.03, at + 0.6 + Math.random() * 1.3);
+      }
+    },
+    // The balloon's burner: a roar while it's held
+    burner(on) {
+      if (!ready()) return;
+      if (!beds.burner) {
+        beds.burnerLow = filter("lowpass", 520, 0.7);
+        beds.burner = gain();
+        source().connect(beds.burnerLow).connect(beds.burner).connect(master);
+      }
+      set(beds.burner, on ? 0.34 : 0, on ? 0.05 : 0.15);
+    },
+    // Dolphins: quick clicks and a whistle
+    dolphin(dist = 0) {
+      if (!ready()) return;
+      const at = ctx.currentTime, k = far(dist / 2);
+      for (let i = 0; i < 5; i++) burst("bandpass", 4000, 6, 0.04 * k, 0.012, at + i * 0.035);
+      const o = tone(5200, 0.025 * k, 0.5, "sine", at + 0.25, 0.05);
+      o.frequency.linearRampToValueAtTime(7600, at + 0.5);
+      o.frequency.linearRampToValueAtTime(5800, at + 0.75);
+    },
   };
 }

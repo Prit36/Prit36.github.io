@@ -106,7 +106,8 @@ export const pathDist = (x, z) => {
 };
 
 // Everything known about one spot. Reused, so a call allocates nothing.
-const F = { h: 0, d: 0, beach: 0, rock: 0, village: 0, path: 0, north: 0, island: 0 };
+const F = { h: 0, d: 0, beach: 0, rock: 0, village: 0, path: 0, north: 0, island: 0, terrace: 0 };
+export const TERRACE_STEP = 3.2;
 export function field(x, z, out = F) {
   let d = coastDist(x, z);
   const beach = 1 - smooth(22, 52, segDist(x, z, BEACH[0], BEACH[1]));
@@ -125,7 +126,7 @@ export function field(x, z, out = F) {
   const vd = Math.hypot(x - 228, (z + 30) * 1.15);
   const village = 1 - smooth(70, 125, vd);
   const north = smooth(-150, -560, z), east = smooth(165, 560, x);
-  let h, rock = 0;
+  let h, rock = 0, terrace = 0;
   if (d >= 0) {
     h = beach * d * 0.055 + rocky * 6.5 * (1 - Math.exp(-d / 4.5));
     if (onIsland) {
@@ -136,6 +137,15 @@ export function field(x, z, out = F) {
     }
     h += (fbm(x / 95, z / 95, 4) - 0.45) * 24 * smooth(8, 90, d);
     h += ((fbm(x / 38, z / 38, 3) - 0.5) * 7 + (fbm(x / 13, z / 13, 2) - 0.5) * 2.2) * smooth(1, 16, d) * (1 - 0.8 * path);
+    // Terraces for olives and lavender on some of the gentler hills
+    if (near && !onIsland) {
+      terrace = smooth(0.5, 0.58, fbm(x / 150 - 13, z / 150 + 6, 3)) * smooth(14, 24, d) * (1 - smooth(0.04, 0.3, village))
+        * smooth(6, 12, h) * (1 - smooth(64, 86, h)) * (1 - smooth(0.4, 0.75, beach));
+      if (terrace > 0) {
+        const step = TERRACE_STEP, q = h / step, fr = q - Math.floor(q);
+        h = lerp(h, (Math.floor(q) + smooth(0.55, 1, fr)) * step, terrace * 0.9 * (1 - path));
+      }
+    }
     // The village is built on terraces.
     if (village > 0 && d > 6) {
       const step = 2.6, q = h / step, f = q - Math.floor(q);
@@ -152,7 +162,26 @@ export function field(x, z, out = F) {
     h = -Math.max(0, depth);
   }
   out.h = h; out.d = d; out.beach = beach; out.rock = rock;
-  out.village = village; out.path = path; out.north = north; out.island = onIsland ? 1 : 0;
+  out.village = village; out.path = path; out.north = north; out.island = onIsland ? 1 : 0; out.terrace = terrace;
+  return out;
+}
+
+// What covers the land besides grass: woods of pine and oak in patches over
+// the hills, maquis scrub between them, and meadows thick with flowers. The
+// ground is painted to match, so from far off the hills read as the painting's
+// dark green, and close to it each patch has its plants.
+const CV = { wood: 0, scrub: 0, meadow: 0, terrace: 0 };
+export function cover(x, z, f = field(x, z, {}), out = CV) {
+  const land = smooth(4, 12, f.d) * smooth(1.6, 3.6, f.h) * (1 - smooth(0.15, 0.5, f.path)) * (1 - smooth(0.3, 0.7, f.beach) * (1 - smooth(4, 9, f.h)));
+  const town = 1 - smooth(0.12, 0.5, f.village);
+  const hills = smooth(8, 34, f.h);
+  const farmed = 1 - smooth(0.1, 0.5, f.terrace);
+  out.wood = smooth(0.5, 0.6, fbm(x / 230 + 5, z / 230 - 3, 4) + f.north * 0.12 + f.island * 0.3) * land * town * hills * farmed;
+  const maquis = smooth(0.4, 0.55, fbm(x / 64 + 2, z / 64 + 9, 3));
+  const cliffs = smooth(34, 8, f.d) * (1 - f.beach) * smooth(0.35, 0.6, noise(x / 23 + 4, z / 23));
+  out.scrub = Math.max(maquis * (0.35 + 0.65 * hills), cliffs) * land * (1 - 0.75 * (1 - town)) * (1 - out.wood * 0.55) * (0.15 + 0.85 * farmed);
+  out.meadow = smooth(0.5, 0.62, fbm(x / 110 - 7, z / 110 + 4, 3)) * land * (1 - out.wood) * (1 - out.scrub * 0.6) * (1 - smooth(60, 140, f.h));
+  out.terrace = f.terrace;
   return out;
 }
 
@@ -188,6 +217,7 @@ export const slopeAt = (x, z) => {
 // point of the grid and handed to the shaders.
 let GD = null;   // ground data: height, grass, grass height, green-ness
 let GROUND_TEX = null;
+let CD = null;   // cover data: wood, scrub, meadow
 // Nothing grows under a house or a wall.
 export function clearGround(x, z, rad, keep = 0) {
   if (!GD) return;
@@ -205,6 +235,14 @@ export const grassAt = (x, z) => {
   if (i < 0 || j < 0 || i > CELLS || j > CELLS) return 0;
   return GD[(j * W + i) * 4 + 1];
 };
+// The cover at a point, from the grid (cheaper than working it out again)
+export const coverAt = (x, z) => {
+  const i = Math.round((x + CORE) / STEP), j = Math.round((z + CORE) / STEP);
+  if (!CD || i < 0 || j < 0 || i > CELLS || j > CELLS) return cover(x, z);
+  const c = (j * W + i) * 4;
+  CV.wood = CD[c]; CV.scrub = CD[c + 1]; CV.meadow = CD[c + 2]; CV.terrace = CD[c + 3];
+  return CV;
+};
 
 export function buildTerrain() {
   const n = CELLS + 2 * OUT + 1;
@@ -212,8 +250,10 @@ export function buildTerrain() {
   const pos = new Float32Array(n * n * 3);
   const terr = new Float32Array(n * n * 4);
   const misc = new Float32Array(n * n * 4);
+  const cov = new Float32Array(n * n * 3);
   HG = new Float32Array(W * W);
   GD = new Float32Array(W * W * 4);
+  CD = new Float32Array(W * W * 4);
   const floor = new Uint16Array(W * W * 4);
   const half = THREE.DataUtils.toHalfFloat;
   for (let j = 0; j < n; j++) {
@@ -222,10 +262,13 @@ export function buildTerrain() {
       pos[k * 3] = x; pos[k * 3 + 1] = f.h; pos[k * 3 + 2] = z;
       terr[k * 4] = f.beach; terr[k * 4 + 1] = f.path; terr[k * 4 + 2] = f.rock;
       misc[k * 4] = f.village; misc[k * 4 + 1] = f.d; misc[k * 4 + 2] = f.north; misc[k * 4 + 3] = f.island;
+      const cv = cover(x, z, f);
+      cov[k * 3] = cv.wood; cov[k * 3 + 1] = cv.scrub; cov[k * 3 + 2] = cv.meadow;
       const ci = i - OUT, cj = j - OUT;
       if (ci >= 0 && cj >= 0 && ci <= CELLS && cj <= CELLS) {
         const c = cj * W + ci;
         HG[c] = f.h;
+        CD[c * 4] = cv.wood; CD[c * 4 + 1] = cv.scrub; CD[c * 4 + 2] = cv.meadow; CD[c * 4 + 3] = cv.terrace;
         floor[c * 4] = half(f.h);
         floor[c * 4 + 1] = half(f.rock);
         floor[c * 4 + 2] = half(1 - smooth(3, 12, -f.d));
@@ -260,7 +303,8 @@ export function buildTerrain() {
       let g = smooth(1.2, 2.4, h) * (1 - smooth(0.3, 0.6, beach)) * (1 - smooth(0.05, 0.35, path)) * (1 - smooth(0.3, 0.44, slope));
       g *= smooth(5, 11, d) * (1 - smooth(160, 260, h));
       const patch = smooth(0.32, 0.62, fbm(x / 34 + 3, z / 34 - 8, 3));
-      g *= 0.4 + 0.6 * patch;
+      const wood = cov[k * 3], scrub = cov[k * 3 + 1], meadow = cov[k * 3 + 2];
+      g *= (0.4 + 0.6 * Math.max(patch, meadow)) * (1 - 0.6 * wood) * (1 - 0.25 * scrub);
       if (village > 0.3) g *= 0.85;
       terr[k * 4 + 3] = g;
       const ci = i - OUT, cj = j - OUT;
@@ -268,26 +312,27 @@ export function buildTerrain() {
         const c = (cj * W + ci) * 4;
         GD[c] = h;
         GD[c + 1] = g;
-        GD[c + 2] = 0.55 + 0.75 * fbm(x / 22 - 5, z / 22 + 2, 3) + 0.25 * north;
-        GD[c + 3] = Math.min(1, 0.15 + smooth(0.3, 0.75, fbm(x / 60 + 11, z / 60, 3)) * 0.75 + north * 0.5 + village * 0.25);
+        GD[c + 2] = (0.55 + 0.75 * fbm(x / 22 - 5, z / 22 + 2, 3) + 0.25 * north) * (1 + 0.35 * meadow - 0.3 * wood);
+        GD[c + 3] = Math.min(1, 0.3 + smooth(0.3, 0.75, fbm(x / 60 + 11, z / 60, 3)) * 0.6 + north * 0.4 + village * 0.25 + meadow * 0.5 + wood * 0.4);
       }
     }
   }
   geo.setAttribute("aTerr", new THREE.BufferAttribute(terr, 4));
   geo.setAttribute("aMisc", new THREE.BufferAttribute(misc, 4));
+  geo.setAttribute("aCover", new THREE.BufferAttribute(cov, 3));
   const material = terrainMaterial();
   const mesh = new THREE.Mesh(geo, material);
   mesh.receiveShadow = true;
-  mesh.castShadow = true;
 
   // A coarse copy, for what the water reflects
   const step = 4, m = Math.floor((n - 1) / step) + 1;
-  const cpos = new Float32Array(m * m * 3), cterr = new Float32Array(m * m * 4), cmisc = new Float32Array(m * m * 4);
+  const cpos = new Float32Array(m * m * 3), cterr = new Float32Array(m * m * 4), cmisc = new Float32Array(m * m * 4), ccov = new Float32Array(m * m * 3);
   for (let j = 0; j < m; j++) for (let i = 0; i < m; i++) {
     const k = j * step * n + i * step, c = j * m + i;
     cpos.set(pos.subarray(k * 3, k * 3 + 3), c * 3);
     cterr.set(terr.subarray(k * 4, k * 4 + 4), c * 4);
     cmisc.set(misc.subarray(k * 4, k * 4 + 4), c * 4);
+    ccov.set(cov.subarray(k * 3, k * 3 + 3), c * 3);
   }
   const cindex = new Uint32Array((m - 1) * (m - 1) * 6);
   q = 0;
@@ -300,6 +345,7 @@ export function buildTerrain() {
   cgeo.setAttribute("position", new THREE.BufferAttribute(cpos, 3));
   cgeo.setAttribute("aTerr", new THREE.BufferAttribute(cterr, 4));
   cgeo.setAttribute("aMisc", new THREE.BufferAttribute(cmisc, 4));
+  cgeo.setAttribute("aCover", new THREE.BufferAttribute(ccov, 3));
   cgeo.setIndex(new THREE.BufferAttribute(cindex, 1));
   cgeo.computeVertexNormals();
   const coarse = new THREE.Mesh(cgeo, material);
@@ -313,6 +359,10 @@ export function buildTerrain() {
   GROUND_TEX.needsUpdate = true;
   U.tGround.value = GROUND_TEX;
   U.uGround.value.set(-CORE, -CORE, STEP, W);
+  const coverTex = new THREE.DataTexture(CD, W, W, THREE.RGBAFormat, THREE.FloatType);
+  coverTex.magFilter = coverTex.minFilter = THREE.NearestFilter;
+  coverTex.needsUpdate = true;
+  U.tCover.value = coverTex;
   return { mesh, coarse, floorTex, floorRect: new THREE.Vector4(-CORE, -CORE, CORE * 2, CORE * 2) };
 }
 
@@ -321,7 +371,8 @@ export function buildTerrain() {
 // the village, and under the water, sand with dark rocks and moving light.
 const col = (h) => ({ value: new THREE.Color(h) });
 export const TERRAIN = {
-  cDry: col("#bba862"), cSage: col("#93a473"), cGreen: col("#6a8a46"), cForest: col("#4a6a3a"), cSoil: col("#66683c"),
+  cDry: col("#b5a866"), cSage: col("#8e9f6e"), cGreen: col("#6a8a46"), cForest: col("#4a6a3a"), cSoil: col("#66683c"),
+  cWood: col("#4a5530"), cScrub: col("#4d6634"), cMeadow: col("#87a24c"),
   cRockA: col("#ece2cc"), cRockB: col("#cbbb9d"), cRockC: col("#a59780"),
   cSand: col("#e2cb98"), cWetSand: col("#b9a07a"), cPath: col("#e0cda2"), cCobble: col("#d9c8a8"), cMortar: col("#9c8b72"),
   cBed: col("#d2c096"), cBedRock: col("#3d4f52"), cFar: col("#5f7f60"), cPeak: col("#a3968c"),
@@ -348,11 +399,12 @@ function terrainMaterial() {
     key: "terrain",
     defines: { WRAP: 0.14 },
     uniforms: TERRAIN,
-    vertexPars: "attribute vec4 aTerr, aMisc;\nvarying vec4 vTerr, vMisc;",
-    vertex: "vTerr = aTerr; vMisc = aMisc;",
+    vertexPars: "attribute vec4 aTerr, aMisc;\nattribute vec3 aCover;\nvarying vec4 vTerr, vMisc;\nvarying vec3 vCover;",
+    vertex: "vTerr = aTerr; vMisc = aMisc; vCover = aCover;",
     fragmentPars: /* glsl */ `
       varying vec4 vTerr, vMisc;
-      uniform vec3 cDry, cSage, cGreen, cForest, cSoil, cRockA, cRockB, cRockC, cSand, cWetSand, cPath, cCobble, cMortar, cBed, cBedRock, cFar, cPeak;
+      varying vec3 vCover;
+      uniform vec3 cDry, cSage, cGreen, cForest, cSoil, cWood, cScrub, cMeadow, cRockA, cRockB, cRockC, cSand, cWetSand, cPath, cCobble, cMortar, cBed, cBedRock, cFar, cPeak;
       ${LIMESTONE}
       float caustic(vec2 p) {
         vec4 a = voronoi(p + vec2(uTime * 0.31, uTime * 0.19));
@@ -371,7 +423,22 @@ function terrainMaterial() {
       vec3 col = mix(cDry, cSage, smoothstep(0.36, 0.64, n1));
       col = mix(col, cGreen, smoothstep(0.5, 0.74, n2) * 0.75);
       if (vMisc.z > 0.02) col = mix(col, cForest, smoothstep(0.1, 0.7, vMisc.z) * smoothstep(0.42, 0.62, fbm2(P.xz * 0.008 + 3.)));
+      // scrub dark and close-knit, the floor of the woods in shade, meadows lush
+      col = mix(col, cScrub * (0.8 + 0.4 * n3), vCover.y * 0.7);
+      col = mix(col, cWood * (0.75 + 0.5 * n3), vCover.x * 0.85);
+      col = mix(col, cMeadow * (0.9 + 0.2 * n3), vCover.z * 0.55);
       col *= 0.9 + 0.2 * mix(0.5, n3 * 0.7 + n4 * 0.3, detail);
+      // the flowers in a meadow, as specks of colour from further than the
+      // blades of grass are drawn, and as a tint where even the specks are too small
+      if (vCover.z > 0.03) {
+        vec2 fp = P.xz * 1.3;
+        vec4 fv = voronoi(fp);
+        float kind = vnoise(P.xz * 0.021 + 3.);
+        vec3 fc = kind < 0.42 ? vec3(0.78, 0.1, 0.05) : kind < 0.58 ? vec3(0.95, 0.92, 0.84) : kind < 0.72 ? vec3(0.96, 0.74, 0.12) : vec3(0.52, 0.4, 0.86);
+        float fine = smoothstep(0.25, 0.9, length(fwidth(fp)));
+        float speck = mix(smoothstep(0.3, 0.16, fv.x) * step(0.42, hash12(fv.zw)), 0.13, fine);
+        col = mix(col, fc, speck * vCover.z * smoothstep(20., 45., dist) * 0.85);
+      }
       // close up: dabs laid in one direction per patch, clover, bare earth
       if (detail > 0.) {
         float ang = vnoise(P.xz * 0.06 + 3.) * 6.2832;
@@ -387,15 +454,24 @@ function terrainMaterial() {
       // under the grass near you, earth, so the blades stand out of it
       col = mix(col, cSoil * (0.8 + 0.4 * n4), vTerr.w * (1. - smoothstep(14., 34., dist)) * 0.45);
       // far away, the colours the painting gives the mountains
-      float far = smoothstep(400., 1400., vMisc.y);
+      float far = smoothstep(300., 1100., vMisc.y);
       if (far > 0.) {
-        col = mix(col, cFar * (0.85 + 0.3 * n1), far * 0.75);
-        // forest in patches down the gentler slopes, bare rock along the ridges
-        float wood = smoothstep(0.42, 0.62, fbm2(P.xz * 0.0035 + 4.)) * (1. - smoothstep(0.3, 0.55, slope));
-        col = mix(col, cForest * 0.75, wood * far * 0.8);
-        float ridge = smoothstep(0.35, 0.6, slope) * smoothstep(0.4, 0.7, vnoise(P.xz * 0.006 + P.y * 0.004));
-        col = mix(col, cPeak * 1.05, ridge * far * 0.6);
-        col = mix(col, cPeak, smoothstep(420., 900., h) * smoothstep(0.2, 0.45, slope) * far);
+        // Ridges and ravines painted in (the mesh is coarse out there): light
+        // catches the spurs, the gullies between them go dark with forest
+        float rid = 0.;
+        {
+          vec2 q = P.xz * 0.0042 + vec2(3.1, 7.7);
+          float a = 0.5;
+          for (int i = 0; i < 4; i++) { float v = 1. - abs(vnoise(q) * 2. - 1.); rid += a * v * v; q = q * 2.07 + 5.3; a *= 0.5; }
+        }
+        gBump += (rid - 0.4) * 46. * far;
+        col = mix(col, cFar * (0.85 + 0.3 * n1), far * 0.8);
+        float wood = smoothstep(0.4, 0.58, fbm2(P.xz * 0.0031 + 4.) + (0.45 - rid) * 0.5) * (1. - smoothstep(0.38, 0.6, slope));
+        col = mix(col, cForest * (0.5 + 0.25 * vnoise(P.xz * 0.05)), wood * far * 0.85);
+        col *= mix(1., 0.72 + 0.5 * rid, far);
+        float bare = smoothstep(0.55, 0.8, rid) * smoothstep(0.2, 0.45, slope + (n2 - 0.5) * 0.3);
+        col = mix(col, cPeak * (0.9 + 0.25 * n3), bare * far * 0.75);
+        col = mix(col, cPeak * 1.05, smoothstep(480., 950., h) * smoothstep(0.15, 0.4, slope) * far);
       }
       // sand on the beach, darker where the sea has just been
       float swash = sin(uTime * 0.7 + P.x * 0.05 + P.z * 0.03) * 0.1;

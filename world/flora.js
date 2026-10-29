@@ -210,8 +210,9 @@ function stonePine(seed) {
   }
   clumps.push({ c: V(lean.x, H * 0.9, lean.z), r: V(2.2, 1.05, 2.2) });
   const center = V(lean.x, H * 0.86, lean.z);
-  foliage(leaves, { clumps, count: 300, size: [1.5, 2.2], center, squash: 2.2, top: C("#6a8a48"), bottom: C("#3a5530"), inner: 0.5 }, r);
-  return { wood: wood.geometry(), leaves: leaves.geometry(), height: H, radius: 0.35 };
+  const crown = { clumps, count: 300, size: [1.5, 2.2], center, squash: 2.2, top: C("#6a8a48"), bottom: C("#3a5530"), inner: 0.5 };
+  foliage(leaves, crown, r);
+  return { wood: wood.geometry(), leaves: leaves.geometry(), height: H, radius: 0.35, crown, trunk: [V(0, -0.5, 0), top, 0.3], bark: "#6e5240" };
 }
 
 function cypress(seed) {
@@ -226,8 +227,9 @@ function cypress(seed) {
     const w = R * Math.pow(Math.sin(Math.min(1, k * 1.25 + 0.08) * Math.PI * 0.5 + (k > 0.6 ? (k - 0.6) * 1.6 : 0)), 0.8) * (1 - Math.pow(k, 2.6) * 0.92);
     clumps.push({ c: V((r() - 0.5) * 0.15, y, (r() - 0.5) * 0.15), r: V(Math.max(0.18, w), H / 14, Math.max(0.18, w)) });
   }
-  foliage(leaves, { clumps, count: 230, size: [0.75, 1.15], center: V(0, H * 0.45, 0), squash: 0.25, top: C("#4c6c3a"), bottom: C("#263f24"), inner: 0.45 }, r);
-  return { wood: wood.geometry(), leaves: leaves.geometry(), height: H, radius: 0.25 };
+  const crown = { clumps, count: 230, size: [0.75, 1.15], center: V(0, H * 0.45, 0), squash: 0.25, top: C("#4c6c3a"), bottom: C("#263f24"), inner: 0.45 };
+  foliage(leaves, crown, r);
+  return { wood: wood.geometry(), leaves: leaves.geometry(), height: H, radius: 0.25, crown };
 }
 
 function olive(seed, palette = "olive") {
@@ -248,8 +250,9 @@ function olive(seed, palette = "olive") {
   }
   clumps.push({ c: V(0, H * 0.8, 0), r: V(1.7, 1.2, 1.7).multiplyScalar(big ? 1.4 : 1) });
   const pal = big ? [C("#5f7e48"), C("#33502c")] : [C("#aebd98"), C("#6c7e5c")];
-  foliage(leaves, { clumps, count: big ? 300 : 240, size: big ? [1.4, 2] : [1.05, 1.5], center: V(0, H * 0.72, 0), squash: 1.3, top: pal[0], bottom: pal[1], inner: 0.55 }, r);
-  return { wood: wood.geometry(), leaves: leaves.geometry(), height: H, radius: 0.32 };
+  const crown = { clumps, count: big ? 300 : 240, size: big ? [1.4, 2] : [1.05, 1.5], center: V(0, H * 0.72, 0), squash: 1.3, top: pal[0], bottom: pal[1], inner: 0.55 };
+  foliage(leaves, crown, r);
+  return { wood: wood.geometry(), leaves: leaves.geometry(), height: H, radius: 0.32, crown, trunk: [V(0, -0.4, 0), V(0, H * 0.45, 0), 0.28], bark: big ? "#5a4b3e" : "#77695b" };
 }
 
 function palm(seed) {
@@ -289,43 +292,126 @@ function palm(seed) {
   return { wood: wood.geometry(), leaves: leaves.geometry(), height: H, radius: 0.3 };
 }
 
-function bush(seed, flowering = null) {
+// A bush: a few clumps of leaves, and flowers over them if it's in flower.
+// Bigger and darker, it's the maquis that covers the hills (lentisk, myrtle,
+// broom and rock-rose); small, grey and purple, it's lavender.
+function bush(seed, flowering = null, o = {}) {
   const r = rng(seed);
   const leaves = new Mesher();
   const clumps = [];
-  const n = 2 + Math.floor(r() * 3);
-  for (let i = 0; i < n; i++) {
-    const a = r() * Math.PI * 2, d = r() * 0.6;
-    const rr = 0.55 + r() * 0.45;
-    clumps.push({ c: V(Math.cos(a) * d, rr * 0.75, Math.sin(a) * d), r: V(rr * 1.15, rr * 0.85, rr * 1.15) });
+  const { n = [2, 3], spread = 0.6, rad = [0.55, 0.45], count = 46, size = [0.65, 1.0], flowers = 22, flowerSize = [0.4, 0.62], squat = 0.85 } = o;
+  const k = n[0] + Math.floor(r() * n[1]);
+  for (let i = 0; i < k; i++) {
+    const a = r() * Math.PI * 2, d = r() * spread;
+    const rr = rad[0] + r() * rad[1];
+    clumps.push({ c: V(Math.cos(a) * d, rr * squat * 0.9, Math.sin(a) * d), r: V(rr * 1.15, rr * squat, rr * 1.15) });
   }
-  const greens = [[C("#7f9850"), C("#3f5a30")], [C("#9aa86a"), C("#55693e")], [C("#6d8a46"), C("#344d2a")]];
+  const greens = o.greens || [[C("#7f9850"), C("#3f5a30")], [C("#9aa86a"), C("#55693e")], [C("#6d8a46"), C("#344d2a")]];
   const [top, bottom] = greens[Math.floor(r() * greens.length)];
-  foliage(leaves, { clumps, count: 46, size: [0.65, 1.0], center: V(0, 0.5, 0), squash: 1.2, top, bottom, inner: 0.5 }, r);
+  const center = V(0, 0.5, 0);
+  const crown = { clumps, count, size, center, squash: 1.2, top, bottom, inner: 0.5 };
+  foliage(leaves, crown, r);
   if (flowering) {
     const c = C(flowering);
-    foliage(leaves, { clumps: clumps.map((k) => ({ c: k.c.clone().add(V(0, 0.08, 0)), r: k.r.clone().multiplyScalar(1.02) })), count: 22, size: [0.4, 0.62], center: V(0, 0.5, 0), squash: 1.2, top: c.clone().multiplyScalar(1.05), bottom: c.clone().multiplyScalar(0.7), inner: 0.75, jitter: 0.08 }, r);
+    foliage(leaves, { clumps: clumps.map((q) => ({ c: q.c.clone().add(V(0, 0.08 + (o.spikes || 0), 0)), r: q.r.clone().multiplyScalar(1.02) })), count: flowers, size: flowerSize, center, squash: 1.2, top: c.clone().multiplyScalar(1.05), bottom: c.clone().multiplyScalar(0.7), inner: 0.75, jitter: 0.08 }, r);
   }
-  return { leaves: leaves.geometry() };
+  return { leaves: leaves.geometry(), crown, flowering };
+}
+const MAQUIS = [[C("#5f7a3c"), C("#283f20")], [C("#6f7c4c"), C("#38472a")], [C("#4d6d38"), C("#20361d")], [C("#7b8a55"), C("#3e4c2c")]];
+const scrub = (seed, flowering) => bush(seed, flowering, { n: [3, 4], spread: 1.1, rad: [0.6, 0.65], count: 70, size: [0.75, 1.2], flowers: 30, flowerSize: [0.45, 0.7], squat: 0.72, greens: MAQUIS });
+const lavender = (seed) => bush(seed, "#8d72d4", { n: [2, 2], spread: 0.2, rad: [0.3, 0.12], count: 26, size: [0.32, 0.5], flowers: 34, flowerSize: [0.24, 0.36], squat: 0.75, spikes: 0.16, greens: [[C("#a3ad8e"), C("#5d6a4e")]] });
+
+// The far version of a plant: a soft lump for each clump of foliage,
+// coloured the way the cards are, and a plain trunk under it.
+const LUMP_BIG = new THREE.SphereGeometry(1, 7, 4), SMALL_LUMP = new THREE.SphereGeometry(1, 6, 4);
+function lumps(t, small = false) {
+  const m = new Mesher();
+  const LUMP = small ? SMALL_LUMP : LUMP_BIG;
+  const { center, squash, top, bottom } = t.crown;
+  let { clumps } = t.crown;
+  if (small) {
+    // a bush far off is one soft shape
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity, z0 = Infinity, z1 = -Infinity;
+    for (const c of clumps) {
+      x0 = Math.min(x0, c.c.x - c.r.x); x1 = Math.max(x1, c.c.x + c.r.x);
+      y0 = Math.min(y0, c.c.y - c.r.y); y1 = Math.max(y1, c.c.y + c.r.y);
+      z0 = Math.min(z0, c.c.z - c.r.z); z1 = Math.max(z1, c.c.z + c.r.z);
+    }
+    clumps = [{ c: V((x0 + x1) / 2, (y0 + y1) / 2, (z0 + z1) / 2), r: V((x1 - x0) / 2 * 0.85, (y1 - y0) / 2, (z1 - z0) / 2 * 0.85) }];
+  } else {
+    // a tree, its four biggest masses
+    clumps = [...clumps].sort((a, b) => b.r.x * b.r.y * b.r.z - a.r.x * a.r.y * a.r.z).slice(0, 4);
+  }
+  let minY = Infinity, maxY = -Infinity;
+  for (const c of clumps) { minY = Math.min(minY, c.c.y - c.r.y); maxY = Math.max(maxY, c.c.y + c.r.y); }
+  const p = LUMP.attributes.position, col = new THREE.Color(), q = V(), v = V(), w = V();
+  for (const c of clumps) {
+    const base = m.count;
+    for (let i = 0; i < p.count; i++) {
+      v.fromBufferAttribute(p, i);
+      w.set(c.c.x + v.x * c.r.x * 0.9, c.c.y + v.y * c.r.y * 0.9, c.c.z + v.z * c.r.z * 0.9);
+      q.subVectors(w, center);
+      q.y *= squash;
+      q.normalize();
+      const n = q.clone().multiplyScalar(0.7).addScaledVector(v, 0.3).normalize();
+      const hk = (w.y - minY) / Math.max(0.01, maxY - minY);
+      col.copy(bottom).lerp(top, Math.min(1, hk * 0.75 + (q.y * 0.5 + 0.5) * 0.35)).multiplyScalar(0.92);
+      m.vert(w, n, col);
+    }
+    for (let i = 0; i < LUMP.index.count; i++) m.i.push(base + LUMP.index.getX(i));
+  }
+  if (t.flowering) {
+    // a cap of the flower colour over the top
+    const fc = C(t.flowering);
+    for (const c of clumps) {
+      const base = m.count;
+      for (let i = 0; i < p.count; i++) {
+        v.fromBufferAttribute(p, i);
+        w.set(c.c.x + v.x * c.r.x * 0.95, c.c.y + 0.06 + v.y * c.r.y * 0.95, c.c.z + v.z * c.r.z * 0.95);
+        m.vert(w, v.clone(), col.copy(fc).multiplyScalar(0.6 + 0.4 * Math.max(0, v.y)));
+      }
+      for (let i = 0; i < LUMP.index.count; i += 3) {
+        const a = LUMP.index.getX(i), b = LUMP.index.getX(i + 1), d = LUMP.index.getX(i + 2);
+        if (p.getY(a) + p.getY(b) + p.getY(d) > 0.9) m.i.push(base + a, base + b, base + d);
+      }
+    }
+  }
+  if (t.trunk) {
+    const [a, b, rad] = t.trunk;
+    tube(m, [a, a.clone().lerp(b, 0.5), b], [rad, rad * 0.85, rad * 0.6], 5, () => C(t.bark));
+  }
+  return m.geometry();
 }
 
 // ------------------------------------------------------------------ planting
 const TEX = {};
 const tex = (k) => (TEX[k] ??= leafTexture(k, k.length * 17 + 3));
 
-function leafMaterial(kind, sway, flutter) {
+function leafMaterial(kind, sway, flutter, lod) {
   const map = tex(kind);
-  const key = `leaf-${kind}-${sway}-${flutter}`;
+  const key = `leaf-${kind}-${sway}-${flutter}-${lod}`;
   const defines = { SWAY: sway, FLUTTER: flutter, FOLIAGE: "0.6", WRAP: "0.5" };
   const mat = stylize(new THREE.MeshLambertMaterial({ map, vertexColors: true, side: THREE.DoubleSide, alphaTest: 0.04, alphaToCoverage: true }), {
-    key, defines, a2c: true, color: A2C, normal: "normal = normalize(vNormal);",
+    key, defines: lod ? { ...defines, LOD_NEAR: lod.toFixed(1) } : defines, a2c: true, color: A2C, normal: "normal = normalize(vNormal);",
   });
   return { mat, depth: swayingDepth({ map, defines, key }) };
 }
-function barkMaterial(sway) {
+// The far lumps: dappled, so they still read as leaves
+function lumpMaterial(lod) {
   return stylize(new THREE.MeshLambertMaterial({ vertexColors: true }), {
-    key: `bark-${sway}`,
-    defines: { SWAY: sway, CONTACT: "0.9", WRAP: "0.25" },
+    key: `lumps-${lod}`,
+    defines: { FOLIAGE: "0.35", WRAP: "0.45", LOD_FAR: lod.toFixed(1), SWAY: "0.002" },
+    color: `{
+      float n = vnoise3(vWorldP * 0.9) * 0.6 + vnoise3(vWorldP * 2.7) * 0.4;
+      diffuseColor.rgb *= 0.74 + 0.48 * n;
+      gBump = n * 0.3;
+    }`,
+  });
+}
+function barkMaterial(sway, lod) {
+  return stylize(new THREE.MeshLambertMaterial({ vertexColors: true }), {
+    key: `bark-${sway}-${lod}`,
+    defines: { SWAY: sway, CONTACT: "0.9", WRAP: "0.25", ...(lod ? { LOD_NEAR: lod.toFixed(1) } : {}) },
     color: `{
       vec2 bp = vec2(atan(vWorldN.z, vWorldN.x) * 3., vWorldP.y * 2.4);
       float fur = vnoise(vec2(bp.x * 2.2, bp.y * 0.6)) * 0.6 + vnoise(bp * 4.) * 0.4;
@@ -335,8 +421,9 @@ function barkMaterial(sway) {
   });
 }
 
-// Many copies, in patches of ground, so what's off screen isn't drawn.
-function patches(scene, parts, list, cell, far) {
+// Many copies, in patches of ground, so what's off screen isn't drawn; a
+// patch is shown between `min` and `far` from the camera.
+function patches(scene, parts, list, cell, far, min = -1) {
   const groups = new Map();
   for (const p of list) {
     const k = `${Math.floor(p.x / cell)},${Math.floor(p.z / cell)}`;
@@ -366,55 +453,66 @@ function patches(scene, parts, list, cell, far) {
       scene.add(im);
       meshes.push(im);
     }
-    chunks.push({ center, meshes, far });
+    let reach = 0;
+    items.forEach((p) => { reach = Math.max(reach, Math.hypot(p.x - center.x, p.z - center.z)); });
+    chunks.push({ center, meshes, far, min: min - reach });
   }
   return chunks;
 }
 
-// kinds: pine, cypress, olive, oak, palm, bush
+// kinds: pine, cypress, olive, oak, palm, bush, scrub, lavender, far
 export function createFlora(scene, plants) {
-  const r = rng(404);
   const chunks = [];
-  const make = (gen, seeds, sway, flutter, kindTex) => seeds.map((sd) => {
-    const t = gen(sd);
-    return t;
-  });
+  // Each kind: its variants, how it moves, and where it changes from leaf
+  // cards to lumps (lod) and stops being drawn (far).
   const kinds = {
-    pine: { gen: stonePine, seeds: [11, 12, 13], sway: "0.0032", flutter: "0.03", tex: "needle", cell: 120, far: 1400 },
-    cypress: { gen: cypress, seeds: [21, 22, 23], sway: "0.0034", flutter: "0.02", tex: "scale", cell: 120, far: 1400 },
-    olive: { gen: (s) => olive(s), seeds: [31, 32, 33], sway: "0.006", flutter: "0.035", tex: "leafy", cell: 120, far: 900 },
-    oak: { gen: (s) => olive(s, "oak"), seeds: [41, 42], sway: "0.004", flutter: "0.03", tex: "leafy", cell: 160, far: 1800 },
+    pine: { gen: stonePine, seeds: [11, 12, 13], sway: "0.0032", flutter: "0.03", tex: "needle", cell: 110, lod: 240, far: 2600 },
+    cypress: { gen: cypress, seeds: [21, 22, 23], sway: "0.0034", flutter: "0.02", tex: "scale", cell: 110, lod: 220, far: 2200 },
+    olive: { gen: (s) => olive(s), seeds: [31, 32, 33], sway: "0.006", flutter: "0.035", tex: "leafy", cell: 110, lod: 200, far: 1600 },
+    oak: { gen: (s) => olive(s, "oak"), seeds: [41, 42], sway: "0.004", flutter: "0.03", tex: "leafy", cell: 110, lod: 240, far: 2600 },
     palm: { gen: palm, seeds: [51, 52], sway: "0.006", flutter: "0.02", tex: "frond", cell: 120, far: 900 },
   };
   for (const [kind, k] of Object.entries(kinds)) {
     const list = plants.filter((p) => p.kind === kind);
     if (!list.length) continue;
-    const variants = make(k.gen, k.seeds);
-    const leaf = leafMaterial(k.tex, k.sway, k.flutter);
-    const bark = barkMaterial(k.sway);
+    const variants = k.seeds.map((s) => k.gen(s));
+    const leaf = leafMaterial(k.tex, k.sway, k.flutter, k.lod);
+    const bark = barkMaterial(k.sway, k.lod);
+    const lump = k.lod && lumpMaterial(k.lod);
     variants.forEach((tv, vi) => {
       const mine = list.filter((_, i) => i % variants.length === vi);
       chunks.push(...patches(scene, [
         { geo: tv.wood, mat: bark, reflect: true },
         { geo: tv.leaves, mat: leaf.mat, depth: leaf.depth, tint: true, reflect: true },
-      ], mine, k.cell, k.far));
+      ], mine, k.cell, k.lod ? k.lod + k.cell * 0.75 : k.far));
+      if (lump) chunks.push(...patches(scene, [{ geo: lumps(tv), mat: lump, tint: true, shadow: false, reflect: true }], mine, 420, k.far, k.lod - 24));
     });
   }
-  // Bushes, plain and in flower
-  const bushes = plants.filter((p) => p.kind === "bush");
-  if (bushes.length) {
-    const leaf = leafMaterial("leafy", "0.03", "0.02");
-    const flowers = [null, null, null, "#d9538c", "#f1ede0", "#e8c240", "#b46fd0"];
-    const variants = flowers.map((f, i) => bush(61 + i, f));
-    variants.forEach((v, vi) => {
-      const mine = bushes.filter((p) => (p.flower ? 3 + (p.flower - 1) % 4 : Math.floor(p.v * 3)) === vi);
-      if (mine.length) chunks.push(...patches(scene, [{ geo: v.leaves, mat: leaf.mat, depth: leaf.depth, tint: true }], mine, 90, 420));
+  // Bushes, plain and in flower; the maquis; lavender
+  const shrubs = [
+    { kind: "bush", make: (f, i) => bush(61 + i, f), flowers: [null, null, null, "#d9538c", "#f1ede0", "#e8c240", "#b46fd0"],
+      pick: (p) => (p.flower ? 3 + (p.flower - 1) % 4 : Math.floor(p.v * 3)), cell: 80, lod: 140, far: 1200 },
+    { kind: "scrub", make: (f, i) => scrub(81 + i, f), flowers: [null, null, null, "#e9c53a", "#efd4dc", "#f4efe6"],
+      pick: (p) => (p.flower ? 2 + p.flower : Math.floor(p.v * 3)), cell: 80, lod: 130, far: 820 },
+    { kind: "lavender", make: (f, i) => lavender(91 + i), flowers: [1, 2],
+      pick: (p) => Math.floor(p.v * 2), cell: 60, lod: 70, far: 380 },
+  ];
+  for (const s of shrubs) {
+    const list = plants.filter((p) => p.kind === s.kind);
+    if (!list.length) continue;
+    const leaf = leafMaterial("leafy", "0.03", "0.02", s.lod);
+    const lump = lumpMaterial(s.lod);
+    s.flowers.map(s.make).forEach((v, vi) => {
+      const mine = list.filter((p) => s.pick(p) === vi);
+      if (!mine.length) return;
+      chunks.push(...patches(scene, [{ geo: v.leaves, mat: leaf.mat, depth: leaf.depth, tint: true }], mine, s.cell, s.lod + s.cell * 0.75));
+      chunks.push(...patches(scene, [{ geo: lumps(v, true), mat: lump, tint: true, shadow: false }], mine, 380, s.far, s.lod - 24));
     });
   }
   // The far hills: dark round trees, just masses of colour at that distance
   const woods = plants.filter((p) => p.kind === "far");
   if (woods.length) {
-    const g = new THREE.IcosahedronGeometry(1, 1);
+    const g = new THREE.SphereGeometry(1, 7, 4);
     const p = g.attributes.position, cc = new Float32Array(p.count * 3);
     for (let i = 0; i < p.count; i++) { const k = 0.7 + 0.3 * (p.getY(i) * 0.5 + 0.5); cc.set([k, k, k], i * 3); }
     g.setAttribute("color", new THREE.BufferAttribute(cc, 3));
@@ -424,9 +522,12 @@ export function createFlora(scene, plants) {
   }
   return {
     chunks,
+    // how far out plants are drawn, as a share of the full distance (less on slower machines)
+    reach: 1,
     update(cam) {
       for (const c of chunks) {
-        const vis = c.center.distanceTo(cam) < c.far;
+        const d = c.center.distanceTo(cam);
+        const vis = d < c.far * (c.far > 700 ? this.reach : 1) && d > c.min;
         for (const m of c.meshes) m.visible = vis;
       }
     },
@@ -438,7 +539,7 @@ export function createFlora(scene, plants) {
 // out to the middle distance. Each blade finds the ground under it, and how
 // thick the grass is there, from the ground data.
 const GRASS_COLORS = {
-  cDryB: { value: C("#5f5a2f") }, cDryT: { value: C("#c4b56f") }, cGrnB: { value: C("#2e4a26") }, cGrnT: { value: C("#8cab58") },
+  cDryB: { value: C("#5c5a30") }, cDryT: { value: C("#b9b06e") }, cGrnB: { value: C("#2f4826") }, cGrnT: { value: C("#8aa25c") },
 };
 export function createGrass() {
   const make = (count, size, segs, o) => {
@@ -498,11 +599,12 @@ export function createGrass() {
         vec2 root = uTile.xy + rel;
         float dist = length(root - cameraPosition.xz);
         vec4 gd = groundData(root);
+        vec3 cv = coverData(root);
         float clump = smoothstep(0.2, 0.75, vnoise(root * 0.85 + 3.)) * 1.35;
         float dens = gd.g * mix(0.45, 1.25, clump);
         float fade = smoothstep(uFade.x, uFade.y, dist) * (1. - smoothstep(uFade.z, uFade.w, dist));
         float keep = smoothstep(aBlade.z, aBlade.z + 0.08, dens) * fade;
-        float fl = step(1. - uDims.z * (0.2 + 1.6 * smoothstep(0.45, 0.8, vnoise(root * 0.07 + 11.))), fract(aBlade.w * 13.7)) * step(0.1, gd.g);
+        float fl = step(1. - uDims.z * (0.2 + 1.6 * smoothstep(0.45, 0.8, vnoise(root * 0.07 + 11.)) + 7. * cv.z), fract(aBlade.w * 13.7)) * step(0.1, gd.g);
         float hgt = uDims.y * gd.b * (0.55 + 0.9 * fract(aBlade.w * 7.31)) * keep * (1. + fl * 0.3);
         float ang = aBlade.w * 6.2831;
         vec2 face = vec2(cos(ang), sin(ang));
@@ -517,14 +619,16 @@ export function createGrass() {
         lean += away / max(pd, 0.05) * push * 1.8;
         float bl = length(lean);
         float w = uDims.x * (1. - t * t * 0.8) * (0.7 + 0.6 * aBlade.z);
-        float ty = t;
+        float ty = t, head = 0.;
         if (fl > 0.5) {
-          // a flower: a thin stalk, and a small round head on top
-          w = t > 0.6 ? 0.03 * (t > 0.95 ? 0.4 : 1.) : 0.005;
-          ty = t <= 0.5 ? t * 1.6 : 0.8 + (t - 0.5) * 0.4;
+          // a flower: a thin stalk, and a cup of petals turned up at the top
+          head = step(0.6, t);
+          w = head > 0. ? 0.05 : 0.005;
+          ty = t <= 0.5 ? t * 1.6 : 0.8 + (t - 0.5) * 0.12;
         }
         vec3 gPos = vec3(root.x, gd.r - 0.05, root.y);
         gPos.xz += across * s * w * step(0.001, hgt);
+        gPos.xz += face * head * (t - 0.8) * 0.26 * step(0.001, hgt);
         gPos.y += hgt * ty / (1. + bl * bl * 0.35);
         gPos.xz += lean * hgt * t * t;
         vec3 objectNormal = normalize(vec3(face.x * 0.25 + lean.x * 0.35, 1., face.y * 0.25 + lean.y * 0.35));
@@ -533,6 +637,12 @@ export function createGrass() {
         if (fl > 0.5 && t > 0.6) {
           float k = fract(aBlade.w * 29.1);
           vGrassCol = k < 0.3 ? vec3(0.9, 0.86, 0.75) : k < 0.5 ? vec3(0.95, 0.62, 0.08) : k < 0.68 ? vec3(0.8, 0.07, 0.03) : k < 0.86 ? vec3(0.42, 0.28, 0.75) : vec3(0.85, 0.3, 0.5);
+          // a meadow mostly has one flower: poppies here, daisies there
+          if (cv.z > 0.2 && fract(aBlade.w * 41.3) < 0.75) {
+            float kind = vnoise(root * 0.021 + 3.);
+            vGrassCol = kind < 0.42 ? vec3(0.8, 0.07, 0.03) : kind < 0.58 ? vec3(0.95, 0.92, 0.84) : kind < 0.72 ? vec3(0.96, 0.72, 0.1) : vec3(0.5, 0.36, 0.86);
+          }
+          vGrassCol *= 0.85 + 0.3 * t;
         }`,
       vertexBegin: "vec3 transformed = gPos;",
       fragmentPars: "varying vec3 vGrassCol;",
@@ -545,16 +655,123 @@ export function createGrass() {
     mesh.userData.full = count;
     return { mesh, uniforms };
   };
-  const near = make(90000, 36, 4, { seed: 7, fade: [-1, 0, 12, 17], width: 0.034, height: 0.5, flowers: 0.03, lean: 0.12 });
+  const near = make(90000, 36, 4, { seed: 7, fade: [-1, 0, 12, 17], width: 0.034, height: 0.5, flowers: 0, lean: 0.12 });
   const far = make(70000, 140, 3, { seed: 8, fade: [11, 16, 46, 66], width: 0.1, height: 0.55, flowers: 0.02, lean: 0.12 });
+  const bloom = flowers(26000, 34);
+  const all = [near, far, bloom];
   return {
-    meshes: [near.mesh, far.mesh],
+    meshes: all.map((m) => m.mesh),
     update(cam) {
-      near.uniforms.uTile.value.x = far.uniforms.uTile.value.x = cam.x;
-      near.uniforms.uTile.value.y = far.uniforms.uTile.value.y = cam.z;
+      for (const m of all) { m.uniforms.uTile.value.x = cam.x; m.uniforms.uTile.value.y = cam.z; }
     },
     set density(k) {
-      for (const m of [near.mesh, far.mesh]) m.geometry.instanceCount = Math.floor(m.userData.full * k);
+      for (const { mesh } of all) mesh.geometry.instanceCount = Math.floor(mesh.userData.full * k);
     },
   };
+}
+
+// Wildflowers near you: a stalk and a head of petals, turned up to the
+// sun, in drifts of one kind (poppies here, daisies there) through the
+// meadows, and a few anywhere the grass grows.
+function flowers(count, size) {
+  const pos = [], part = [], idx = [];
+  const w = 0.0045;
+  // the stalk, two crossed strips
+  for (const [ax, az] of [[1, 0], [0, 1]]) {
+    const b = pos.length / 3;
+    pos.push(-w * ax, 0, -w * az, w * ax, 0, w * az, -w * ax, 1, -w * az, w * ax, 1, w * az);
+    part.push(0, 0, 0, 0);
+    idx.push(b, b + 1, b + 2, b + 1, b + 3, b + 2);
+  }
+  // the head: a centre and a ring of petals, cupped
+  const c0 = pos.length / 3;
+  pos.push(0, 1, 0);
+  part.push(2);
+  const P = 12;
+  for (let i = 0; i < P; i++) {
+    const a = (i / P) * Math.PI * 2, rr = i % 2 ? 0.66 : 1;
+    pos.push(Math.cos(a) * rr, 1 + 0.32 * rr, Math.sin(a) * rr);
+    part.push(1);
+  }
+  for (let i = 0; i < P; i++) idx.push(c0, c0 + 1 + i, c0 + 1 + ((i + 1) % P));
+  const g = new THREE.InstancedBufferGeometry();
+  g.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  g.setAttribute("normal", new THREE.Float32BufferAttribute(pos.map((_, i) => (i % 3 === 1 ? 1 : 0)), 3));
+  g.setAttribute("aPart", new THREE.Float32BufferAttribute(part, 1));
+  g.setIndex(idx);
+  const r = rng(9);
+  const data = new Float32Array(count * 4);
+  const side = Math.ceil(Math.sqrt(count));
+  for (let i = 0; i < count; i++) {
+    data[i * 4] = ((i % side) + r()) / side;
+    data[i * 4 + 1] = (Math.floor(i / side) + r()) / side;
+    data[i * 4 + 2] = r();
+    data[i * 4 + 3] = r();
+  }
+  for (let i = count - 1; i > 0; i--) {
+    const j = Math.floor(r() * (i + 1));
+    for (let k = 0; k < 4; k++) { const t = data[i * 4 + k]; data[i * 4 + k] = data[j * 4 + k]; data[j * 4 + k] = t; }
+  }
+  g.setAttribute("aBlade", new THREE.InstancedBufferAttribute(data, 4));
+  g.instanceCount = count;
+  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
+  const uniforms = { uTile: { value: new THREE.Vector4(0, 0, size, 0) } };
+  const mat = stylize(new THREE.MeshLambertMaterial({ side: THREE.DoubleSide }), {
+    key: "flowers",
+    defines: { FOLIAGE: "0.7", WRAP: "0.5", FLOWER_TILE: size.toFixed(1) },
+    uniforms,
+    noiseVertex: true,
+    vertexPars: /* glsl */ `
+      attribute vec4 aBlade;
+      attribute float aPart;
+      uniform vec4 uTile;
+      varying vec3 vFlowerCol;
+      ${GROUND}`,
+    vertexHead: /* glsl */ `
+      vec2 rel = aBlade.xy * uTile.z - uTile.xy;
+      rel -= uTile.z * floor(rel / uTile.z + 0.5);
+      vec2 root = uTile.xy + rel;
+      float dist = length(root - cameraPosition.xz);
+      vec4 gd = groundData(root);
+      vec3 cv = coverData(root);
+      float want = (cv.z * 0.85 + 0.035) * smoothstep(0.08, 0.3, gd.g) * (0.4 + 0.6 * smoothstep(0.3, 0.7, vnoise(root * 0.18 + 5.)));
+      float keep = step(aBlade.z, want) * (1. - smoothstep(FLOWER_TILE * 0.32, FLOWER_TILE * 0.48, dist));
+      float hgt = (0.28 + 0.34 * fract(aBlade.w * 7.31)) * gd.b * keep;
+      float hs = (0.03 + 0.03 * fract(aBlade.w * 3.7)) * keep;
+      // which flower: mostly the meadow's own, sometimes any
+      float kind = cv.z > 0.15 && fract(aBlade.w * 41.3) < 0.8 ? vnoise(root * 0.021 + 3.) : fract(aBlade.w * 29.1);
+      vec3 petal = kind < 0.42 ? vec3(0.82, 0.06, 0.03) : kind < 0.58 ? vec3(0.95, 0.93, 0.86) : kind < 0.72 ? vec3(0.98, 0.74, 0.08) : kind < 0.86 ? vec3(0.42, 0.34, 0.9) : vec3(0.9, 0.42, 0.62);
+      vec3 heart = kind < 0.42 ? vec3(0.06, 0.04, 0.05) : kind < 0.72 ? vec3(0.95, 0.65, 0.05) : vec3(0.95, 0.9, 0.7);
+      vec2 away = root - uPlayer.xz;
+      float pd = length(away);
+      float push = (1. - smoothstep(0.25, 1.1, pd)) * (1. - smoothstep(0.6, 1.8, abs(uPlayer.y - gd.r)));
+      float gust = vnoise(root * 0.045 - uWind * uTime * 0.7);
+      vec2 lean = uWind * uGust * (0.12 + 0.5 * gust) * (0.8 + 0.2 * sin(uTime * 2.3 + aBlade.w * 40.)) + away / max(pd, 0.05) * push * 1.6;
+      float ang = aBlade.w * 6.2831;
+      vec2 tilt = vec2(cos(ang), sin(ang)) * 0.25 + lean * 0.6;
+      vec3 gPos;
+      vec3 objectNormal;
+      if (aPart < 0.5) {
+        gPos = vec3(root.x + position.x, gd.r - 0.03 + position.y * hgt, root.y + position.z);
+        gPos.xz += lean * hgt * position.y * position.y;
+        objectNormal = normalize(vec3(position.x, 0.3, position.z) + vec3(0.001));
+        vFlowerCol = vec3(0.2, 0.34, 0.12);
+      } else {
+        vec3 l = vec3(position.x, position.y - 1., position.z) * hs;
+        l.y += dot(l.xz, tilt) * 0.8;
+        gPos = vec3(root.x, gd.r - 0.03 + hgt, root.y) + l;
+        gPos.xz += lean * hgt;
+        objectNormal = normalize(vec3(-tilt.x, 1., -tilt.y));
+        vFlowerCol = aPart > 1.5 ? heart : petal * (0.85 + 0.25 * fract(aBlade.w * 11.1));
+      }`,
+    vertexBegin: "vec3 transformed = gPos;",
+    fragmentPars: "varying vec3 vFlowerCol;",
+    color: "diffuseColor.rgb = vFlowerCol;",
+    normal: "normal = normalize(vNormal);",
+  });
+  const mesh = new THREE.Mesh(g, mat);
+  mesh.frustumCulled = false;
+  mesh.receiveShadow = true;
+  mesh.userData.full = count;
+  return { mesh, uniforms };
 }

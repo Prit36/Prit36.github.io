@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { rng, noise, smooth, field, heightAt, slopeAt, addSolid, pathDist, clearGround, ISLANDS, PATHS, TERRAIN, LIMESTONE } from "./land.js";
+import { rng, noise, smooth, field, heightAt, slopeAt, addSolid, pathDist, clearGround, coverAt, ISLANDS, PATHS, TERRAIN, LIMESTONE, TERRACE_STEP } from "./land.js";
 import { stylize, U, NOISE, FOG } from "./style.js";
 
 // Everything built on the bay: the village with its windows and shutters,
@@ -17,7 +17,7 @@ const M = (x, y, z, ry = 0, sx = 1, sy = 1, sz = 1, rx = 0, rz = 0) =>
     new THREE.Quaternion().setFromEuler(new THREE.Euler(rx, ry, rz, "YXZ")), new THREE.Vector3(sx, sy, sz));
 
 // What a part is made of
-const PLAIN = 0, PLASTER = 1, STONE = 2, TILE = 3, WOOD = 4, LOUVRE = 5, PAVING = 6, METAL = 7, CLOTH = 8;
+const PLAIN = 0, PLASTER = 1, STONE = 2, TILE = 3, WOOD = 4, LOUVRE = 5, PAVING = 6, METAL = 7, CLOTH = 8, DRY = 9;
 
 // A bag of parts, merged into one geometry at the end.
 export class Kit {
@@ -114,6 +114,13 @@ export function builtMaterial(o = {}) {
         col *= mix(0.84 + 0.26 * hash12(floor(tp)), 0.68, (1. - smoothstep(0.02, 0.06, edge)) * detail);
       } else if (kind == 8) {
         col *= 0.9 + 0.1 * vnoise(fuv * 5.);
+      } else if (kind == 9) {
+        // dry stone: fieldstones of every size, no mortar, dark between
+        vec4 v = voronoi(fuv * vec2(1.7, 2.9));
+        float edge = smoothstep(0.02, 0.14, v.y - v.x);
+        col *= mix(0.42, (0.78 + 0.36 * hash12(v.zw)) * (0.92 + 0.12 * vnoise(fuv * 7.)), mix(1., edge, detail));
+        col = mix(col, col * vec3(0.82, 0.88, 0.7), smoothstep(0.6, 0.85, vnoise(fuv * 0.9 + 4.)) * 0.5);
+        gBump = (edge * 0.06 + vnoise(fuv * 9.) * 0.012) * detail;
       }
       diffuseColor.rgb = col;
     }`,
@@ -195,10 +202,30 @@ export function buildWorld(scene) {
   const lamps = [];               // street lamps: [x, y, z]
   const plants = [];              // trees and bushes for the flora
   const foam = [];                // [x, z, radius] things standing in the sea
+  const bulbs = [];               // [x, y, z]: strings of lights
   const places = {};
-  const footprints = [];          // [x, z, radius]: keep trees off these
-  const clear = (x, z, rad) => footprints.every(([fx, fz, fr]) => Math.hypot(x - fx, z - fz) > fr + rad);
-  const claim = (x, z, rad, grass = 0) => { footprints.push([x, z, rad]); clearGround(x, z, rad, grass); };
+  // Footprints, [x, z, radius], keep trees and rocks off what's built and
+  // off each other. Kept in a grid, since there are thousands.
+  const FP = new Map(), FC = 8;
+  const footprint = (x, z, rad) => {
+    const e = [x, z, rad];
+    for (let i = Math.floor((x - rad) / FC); i <= Math.floor((x + rad) / FC); i++) {
+      for (let j = Math.floor((z - rad) / FC); j <= Math.floor((z + rad) / FC); j++) {
+        const k = i * 100003 + j;
+        if (!FP.has(k)) FP.set(k, []);
+        FP.get(k).push(e);
+      }
+    }
+  };
+  const clear = (x, z, rad) => {
+    for (let i = Math.floor((x - rad) / FC); i <= Math.floor((x + rad) / FC); i++) {
+      for (let j = Math.floor((z - rad) / FC); j <= Math.floor((z + rad) / FC); j++) {
+        for (const [fx, fz, fr] of FP.get(i * 100003 + j) || []) if (Math.hypot(x - fx, z - fz) <= fr + rad) return false;
+      }
+    }
+    return true;
+  };
+  const claim = (x, z, rad, grass = 0) => { footprint(x, z, rad); clearGround(x, z, rad, grass); };
 
   // A frame at (x, z) turned by rot: local (lx, lz) to world
   const frame = (x, z, rot) => {
@@ -258,6 +285,21 @@ export function buildWorld(scene) {
     if (arch) put(0, y + h, 0.05, w / 2 + 0.1, w / 2 + 0.1, 1.2, "#e3d8c2", STONE, ARCH);
     else put(0, y + h + 0.1, 0.05, w + 0.4, 0.2, 0.14, "#e3d8c2", STONE);
     put(0, y + 0.08, 0.35, w + 0.6, 0.16, 0.7, "#d8cdb6", STONE);
+    // pots either side: geraniums, a lemon tree, a tall pot of basil
+    if (o.pots ?? r() < 0.6) {
+      for (const sd of [-1, 1]) {
+        if (r() < 0.25) continue;
+        const big = r() < 0.3, a = sd * (w / 2 + 0.5 + r() * 0.2);
+        put(a, y + (big ? 0.3 : 0.2), 0.4, big ? 0.26 : 0.18, big ? 0.6 : 0.4, big ? 0.26 : 0.18, pick(["#b5653c", "#a65a36", "#c7764a", "#d9d2c4"]), PLAIN, CYL8);
+        if (big) {
+          put(a, y + 1.25, 0.4, 0.04, 1.2, 0.04, "#5d4634", WOOD, CYL6);
+          put(a, y + 1.75, 0.4, 0.45, 0.42, 0.45, "#4f7436", PLAIN, BALL);
+          for (let f = 0; f < 5; f++) put(a + (r() - 0.5) * 0.6, y + 1.55 + r() * 0.4, 0.4 + (r() - 0.5) * 0.5, 0.06, 0.06, 0.06, "#f0cf3a", PLAIN, BALL);
+        } else {
+          put(a, y + 0.5, 0.4, 0.27, 0.22, 0.27, r() < 0.6 ? pick(FLOWERS) : "#5a7d3c", PLAIN, BALL);
+        }
+      }
+    }
     if (lamp) {
       put(w / 2 + 0.45, y + h + 0.15, 0.18, 0.18, 0.28, 0.18, "#2e2a26", METAL);
       const [lx, lz] = onWall(wx, wz, rot, w / 2 + 0.45, 0.2);
@@ -407,6 +449,40 @@ export function buildWorld(scene) {
         }
       }
     }
+    // Stone stairs up the front to the first floor, now and then, with a
+    // landing, a door at the top and pots on the steps
+    if (stories > 1 && r() < 0.3) {
+      const side = r() < 0.5 ? -1 : 1;
+      const ground = heightAt(...F.at(side * (w / 2 - 0.5), d / 2 + 0.6));
+      const landing = lo + FH + 0.05;
+      const rise = landing - ground, n = Math.round(rise / 0.21);
+      const run = n * 0.3;
+      if (rise > 1.4 && rise < 4.4 && run < w - 2) {
+        const tread = run / n, step = rise / n, stone = "#ddd0b6";
+        for (let k = 0; k < n; k++) {
+          const lx = side * (w / 2 - 0.2 - (k + 0.5) * tread), top = ground + (k + 1) * step;
+          const [sx, sz] = F.at(lx, d / 2 + 0.55);
+          kit.put(BOX, stone, M(sx, (top + ground - 0.6) / 2, sz, rot, tread + 0.02, top - ground + 0.6, 1.1), STONE);
+          addSolid({ x: sx, z: sz, hw: tread / 2, hd: 0.55, rot, top, surf: "stone" });
+          if (k % 4 === 2 && r() < 0.7) {
+            const [px, pz] = F.at(lx, d / 2 + 0.9);
+            kit.put(CYL8, "#b5653c", M(px, top + 0.15, pz, 0, 0.12, 0.3, 0.12), PLAIN);
+            kit.put(BALL, r() < 0.5 ? pick(FLOWERS) : "#55783a", M(px, top + 0.38, pz, 0, 0.18, 0.15, 0.18), PLAIN);
+          }
+        }
+        const lx = side * (w / 2 - 0.2 - run - 0.65);
+        const [lpx, lpz] = F.at(lx, d / 2 + 0.55);
+        kit.put(BOX, stone, M(lpx, (landing + ground - 0.6) / 2, lpz, rot, 1.3, landing - ground + 0.6, 1.1), STONE);
+        addSolid({ x: lpx, z: lpz, hw: 0.65, hd: 0.55, rot, top: landing, surf: "stone" });
+        // a low parapet up the outer edge
+        const [ax, az] = F.at(side * (w / 2 - 0.2), d / 2 + 1.05), [bx, bz] = F.at(side * (w / 2 - 0.2 - run), d / 2 + 1.05);
+        beam(kit, [ax, ground + 0.45, az], [bx, landing + 0.45, bz], 0.16, 0.5, wall, PLASTER);
+        const [cx2, cz2] = F.at(lx, d / 2 + 1.05);
+        kit.put(BOX, wall, M(cx2, landing + 0.45, cz2, rot, 1.3, 0.5, 0.16), PLASTER);
+        const [dx2, dz2] = F.at(lx, d / 2);
+        doorAt(dx2, landing, dz2, rot, { w: 0.95, h: 2.05 });
+      }
+    }
     // Bougainvillea up a corner, now and then
     if (r() < 0.3) {
       const [bx, bz] = F.at((r() < 0.5 ? -1 : 1) * (w / 2 - 0.3), d / 2 + 0.55);
@@ -417,22 +493,24 @@ export function buildWorld(scene) {
 
   // ---------------------------------------------------------------- the village
   const villageSpots = [];
-  for (let tries = 0; tries < 4000 && villageSpots.length < 52; tries++) {
-    const x = 150 + r() * 165, z = -140 + r() * 215;
+  for (let tries = 0; tries < 9000 && villageSpots.length < 88; tries++) {
+    const x = 146 + r() * 175, z = -146 + r() * 226;
     const f = field(x, z);
-    if (f.village < 0.25 || f.d < 9 || f.path > 0.05 || pathDist(x, z) < 6) continue;
+    if (f.village < 0.2 || f.d < 9 || f.path > 0.05 || pathDist(x, z) < 5.6) continue;
     if (Math.hypot(x - 262, z + 48) < 22 || Math.hypot(x - 206, z + 8) < 14) continue; // church, plaza
     if (slopeAt(x, z) > 0.45) continue;
-    if (villageSpots.some(([vx, vz, vr]) => Math.hypot(x - vx, z - vz) < vr + 5.2)) continue;
-    villageSpots.push([x, z, 5 + r() * 1.5]);
+    const rad = 4.2 + r() * 1.6;
+    if (villageSpots.some(([vx, vz, vr]) => Math.hypot(x - vx, z - vz) < vr + rad + 1.2)) continue;
+    villageSpots.push([x, z, rad]);
   }
   const houses = [];
-  for (const [x, z] of villageSpots) {
+  for (const [x, z, rad] of villageSpots) {
     // Face down the hill, toward the bay.
     const e = 3;
     const gx = heightAt(x + e, z) - heightAt(x - e, z), gz = heightAt(x, z + e) - heightAt(x, z - e);
     const rot = Math.atan2(-gx, -gz) + (r() - 0.5) * 0.3;
-    houses.push(house(x, z, 6 + r() * 4.5, 6 + r() * 3.5, rot, r() < 0.35 ? 3 : 2));
+    const w = rad * (1.15 + r() * 0.45), d = Math.sqrt(Math.max(16, rad * rad * 4 - w * w)) * (0.85 + r() * 0.15);
+    houses.push(house(x, z, w, d, rot, r() < 0.3 ? 3 : r() < 0.15 ? 1 : 2));
   }
 
   // Washing hung out between neighbours
@@ -481,7 +559,7 @@ export function buildWorld(scene) {
             const wx = cx - dz * 2.25 * side, wz = cz + dx * 2.25 * side;
             if (!clear(wx, wz, 0.6) || pathDist(wx, wz) < 1.9 || noise(wx / 7, wz / 7) < 0.3) continue;
             const y = heightAt(wx, wz);
-            kit.put(BOX, "#d8c8a8", M(wx, y + 0.12, wz, Math.atan2(dx, dz), 0.5, 0.9, 1.74), STONE);
+            kit.put(BOX, "#d8c8a8", M(wx, y + 0.12, wz, Math.atan2(dx, dz), 0.5, 0.9, 1.74), DRY);
             kit.put(BOX, "#e7dcc6", M(wx, y + 0.6, wz, Math.atan2(dx, dz), 0.6, 0.08, 1.76), STONE);
             addSolid({ x: wx, z: wz, hw: 0.25, hd: 0.87, rot: Math.atan2(dx, dz), top: y + 0.64, surf: "stone" });
             clearGround(wx, wz, 1.2, 0.3);
@@ -516,6 +594,44 @@ export function buildWorld(scene) {
   };
   for (const [x, y, z, rot] of lamps) streetLamp(x, y, z, rot);
 
+  // A string of lights between two points, sagging, a bulb every metre or so
+  const festoon = (a, b, sag = 0.6, every = 0.9) => {
+    const len = Math.hypot(b[0] - a[0], b[1] - a[1], b[2] - a[2]);
+    const n = Math.max(2, Math.round(len / every));
+    const at = (k) => [a[0] + (b[0] - a[0]) * k, a[1] + (b[1] - a[1]) * k - Math.sin(k * Math.PI) * sag, a[2] + (b[2] - a[2]) * k];
+    const segs = Math.max(4, Math.round(len / 1.5));
+    for (let s = 0; s < segs; s++) beam(kit, at(s / segs), at((s + 1) / segs), 0.015, 0.015, "#2a2724", METAL);
+    for (let i = 1; i < n; i++) {
+      const [x, y, z] = at(i / n);
+      bulbs.push([x, y - 0.08, z]);
+      if (i % 2) glows.push([x, y - 0.08, z, 1.3, 1, 0.7, 0.36, 2]);
+    }
+  };
+  // A pole for the lights to hang from
+  const pole = (x, z, h) => {
+    const y = heightAt(x, z);
+    kit.put(CYL6, "#4a3b2e", M(x, y + h / 2, z, 0, 0.06, h, 0.06), WOOD);
+    addSolid({ x, z, r: 0.08, top: y + h, surf: "wood" });
+    return [x, y + h - 0.1, z];
+  };
+  // Lights strung across the lanes, from house to house
+  {
+    let n = 0;
+    for (let i = 0; i < houses.length && n < 12; i++) {
+      for (let j = i + 1; j < houses.length && n < 12; j++) {
+        const a = houses[i], b = houses[j];
+        const dd = Math.hypot(a.x - b.x, a.z - b.z);
+        if (dd < 9 || dd > 17 || pathDist((a.x + b.x) / 2, (a.z + b.z) / 2) > 3) continue;
+        const y = Math.min(a.eave, b.eave) - 0.5;
+        if (y < Math.max(a.lo, b.lo) + 3.2) continue;
+        const dx = (b.x - a.x) / dd, dz = (b.z - a.z) / dd;
+        const ra = Math.min(a.w, a.d) / 2 + 0.05, rb = Math.min(b.w, b.d) / 2 + 0.05;
+        festoon([a.x + dx * ra, y, a.z + dz * ra], [b.x - dx * rb, y, b.z - dz * rb], 0.5);
+        n++;
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- the plaza
   {
     const [x, z] = [206, -8], y = heightAt(x, z);
@@ -534,6 +650,16 @@ export function buildWorld(scene) {
     places.plaza = [x, y, z];
     places.fountain = [x, y + 2.5, z];
     claim(x, z, 10);
+    // Lights strung over the square, from six poles round its edge
+    const tops = [];
+    for (let k = 0; k < 6; k++) {
+      const a = 0.3 + (k * Math.PI) / 3;
+      tops.push(pole(x + Math.cos(a) * 8.6, z + Math.sin(a) * 8.6, 4.8));
+    }
+    for (let k = 0; k < 6; k++) {
+      festoon(tops[k], tops[(k + 1) % 6], 0.45);
+      if (k < 3) festoon(tops[k], tops[k + 3], 1.1);
+    }
     // A café under umbrellas, and a market stall
     const cafe = (cx, cz) => {
       const cy = heightAt(cx, cz);
@@ -776,7 +902,7 @@ export function buildWorld(scene) {
       if (Math.abs(a - 2.4) < 0.25) continue;
       const py = heightAt(px, pz);
       if (py < 2) continue;
-      kit.put(BOX, "#e0d3b8", M(px, py + 0.25, pz, -a, 0.45, 0.8, 1.0), STONE);
+      kit.put(BOX, "#e0d3b8", M(px, py + 0.25, pz, -a, 0.45, 0.8, 1.0), DRY);
     }
   }
 
@@ -837,6 +963,28 @@ export function buildWorld(scene) {
       kit.put(BOX, "#5c6a6e", M(hx, deck + 0.17, hz, rot, 0.5, 0.34, 0.3), METAL);
       addSolid({ x: ex, z: ez, hw: 0.3, hd: 1.6, rot, top: deck + 0.4, bottom: deck + 0.2, surf: "board", bouncy: true });
       places.board = [ex, deck + 0.4, ez];
+    }
+    // A crate of fireworks, with its fuse box
+    {
+      const [fx, fz] = along(len - 7, 1.0);
+      kit.put(BOX, "#b8453a", M(fx, deck + 0.3, fz, rot + 0.2, 0.7, 0.6, 0.6), WOOD);
+      kit.put(BOX, "#e8d9a8", M(fx, deck + 0.31, fz, rot + 0.2, 0.72, 0.18, 0.62), PLAIN);
+      kit.put(BOX, "#3a3634", M(fx, deck + 0.75, fz, rot + 0.2, 0.3, 0.3, 0.25), METAL);
+      kit.put(CYL6, "#c9372d", M(fx, deck + 0.98, fz, 0, 0.05, 0.18, 0.05), PLAIN);
+      addSolid({ x: fx, z: fz, hw: 0.35, hd: 0.3, rot: rot + 0.2, top: deck + 0.6, surf: "wood" });
+      places.fireworks = [fx, deck + 0.9, fz];
+    }
+    // Lights strung along the jetty, for evenings
+    {
+      let prev = null;
+      for (let o = 6; o <= len - 2; o += 9) {
+        const [px, pz] = along(o, -1.55);
+        kit.put(CYL6, "#4a3b2e", M(px, deck + 1.6, pz, 0, 0.06, 3.2, 0.06), WOOD);
+        addSolid({ x: px, z: pz, r: 0.08, top: deck + 3.2, surf: "wood" });
+        const top = [px, deck + 3.15, pz];
+        if (prev) festoon(prev, top, 0.4);
+        prev = top;
+      }
     }
     // crates, a barrel and a net on the quay
     {
@@ -1097,12 +1245,118 @@ export function buildWorld(scene) {
     addSolid({ x, z, hw: 0.3, hd: 0.9, rot, top: y + 1, surf: "metal" });
     places.fuel = [x, y, z];
   }
+  // ---------------------------------------------------------------- the windmill and the chapel
+  // A windmill on the ridge above the quarry road, its sails turning in the
+  // wind, and a white chapel with a blue dome over the lavender terraces.
+  const highPoint = (x0, z0, x1, z1) => {
+    let best = null, bh = -Infinity;
+    for (let x = x0; x <= x1; x += 4) for (let z = z0; z <= z1; z += 4) {
+      if (slopeAt(x, z) > 0.16 || pathDist(x, z) < 8 || !clear(x, z, 7) || field(x, z).d < 20) continue;
+      const score = heightAt(x, z) - pathDist(x, z) * 0.12;
+      if (score > bh) { bh = score; best = [x, z]; }
+    }
+    return best;
+  };
+  let windmill = null;
+  {
+    const [x, z] = highPoint(20, -280, 150, -160) || [60, -230];
+    const y = heightAt(x, z) - 0.4;
+    const face = Math.atan2(-20 - x, -55 - z);
+    const F = frame(x, z, face);
+    kit.put(new THREE.CylinderGeometry(2.5, 3.1, 9, 24), "#f4eee0", M(x, y + 4.5, z), PLASTER);
+    kit.put(new THREE.CylinderGeometry(3.2, 3.3, 0.6, 24), "#d8c9aa", M(x, y + 0.3, z), STONE);
+    kit.put(new THREE.CylinderGeometry(2.66, 2.62, 0.28, 24), "#e3d6bb", M(x, y + 9.05, z), STONE);
+    kit.put(new THREE.ConeGeometry(2.95, 2.7, 24), "#7a5a3c", M(x, y + 10.5, z), WOOD);
+    kit.put(BALL, "#6a4c32", M(x, y + 11.9, z, 0, 0.22, 0.22, 0.22), WOOD);
+    const [dx, dz] = F.at(0, 3.02);
+    doorAt(dx, y + 0.55, dz, face, { w: 1.0, h: 2.0, arch: true, lamp: false, color: "#3f6577" });
+    for (const [a, hy] of [[1.2, 4.6], [-1.6, 6.8], [2.6, 7.2]]) {
+      const rad = 3.0 - hy * 0.065;
+      windowAt(x + Math.sin(face + a) * rad, y + hy, z + Math.cos(face + a) * rad, face + a, 0.5, 0.75, { lit: true, trim: "#e5d9c2", box: false });
+    }
+    addSolid({ x, z, r: 3.15, top: y + 9.2, surf: "stone" });
+    claim(x, z, 7);
+    // The sails: eight spars and a triangle of canvas on each, turning on an
+    // axle out of the front of the roof.
+    const s = new Kit();
+    s.put(CYL8, "#5d4634", M(0, 0, -0.6, 0, 0.16, 1.8, 0.16, Math.PI / 2), WOOD);
+    s.put(BALL, "#5d4634", M(0, 0, 0.35, 0, 0.3, 0.3, 0.3), WOOD);
+    for (let k = 0; k < 8; k++) {
+      const a = (k / 8) * Math.PI * 2;
+      const ca = Math.cos(a), sa = Math.sin(a);
+      s.put(BOX, "#6e5039", M(ca * 3.4, sa * 3.4, 0.3, 0, 6.8, 0.1, 0.1, 0, a), WOOD);
+      const b = a + 0.36, tri = new THREE.BufferGeometry();
+      tri.setAttribute("position", new THREE.Float32BufferAttribute([
+        ca * 1.1, sa * 1.1, 0.32, ca * 6.4, sa * 6.4, 0.32, Math.cos(b) * 5.2, Math.sin(b) * 5.2, 0.2,
+      ], 3));
+      tri.computeVertexNormals();
+      s.put(tri, "#f6efe0", new THREE.Matrix4(), CLOTH);
+      // the rope from each tip to the next
+      const n2 = a + Math.PI / 4;
+      beam(s, [ca * 6.6, sa * 6.6, 0.3], [Math.cos(n2) * 6.6, Math.sin(n2) * 6.6, 0.3], 0.02, 0.02, "#cdb991", PLAIN);
+    }
+    const sails = new THREE.Mesh(s.geometry(), builtMaterial({ key: "sails", side: THREE.DoubleSide }));
+    sails.castShadow = true;
+    sails.receiveShadow = true;
+    sails.layers.enable(1);
+    const hub = new THREE.Group();
+    const [hx, hz] = F.at(0, 3.0);
+    hub.position.set(hx, y + 9.9, hz);
+    hub.rotation.y = face;
+    hub.add(sails);
+    scene.add(hub);
+    windmill = { hub, sails, x, z };
+    places.windmill = [x, y, z];
+  }
+  {
+    const [x, z] = highPoint(-290, -340, -120, -190) || [-200, -260];
+    const y = heightAt(x, z) - 0.3, rot = Math.atan2(-20 - x, -55 - z);
+    const F = frame(x, z, rot);
+    const WHITE = "#f8f5ee", BLUE = "#2f6fb0";
+    kit.put(BOX, WHITE, M(x, y + 1.9, z, rot, 5, 5, 7), PLASTER);
+    kit.put(BOX, "#e8e2d4", M(x, y + 4.45, z, rot, 5.3, 0.18, 7.3), STONE);
+    kit.put(BOX, WHITE, M(x, y + 4.95, z, rot, 3.9, 0.8, 3.9), PLASTER);
+    kit.put(new THREE.CylinderGeometry(1.75, 1.75, 1.3, 24), WHITE, M(x, y + 6, z), PLASTER);
+    kit.put(new THREE.SphereGeometry(1.82, 24, 10, 0, Math.PI * 2, 0, Math.PI / 2), BLUE, M(x, y + 6.62, z), PLAIN);
+    kit.put(BOX, "#e3c46a", M(x, y + 8.75, z, rot, 0.08, 0.7, 0.08), METAL);
+    kit.put(BOX, "#e3c46a", M(x, y + 8.85, z, rot, 0.4, 0.08, 0.08), METAL);
+    // the bell gable over the door, with its bell in an arch
+    const [gx, gz] = F.at(0, 3.45);
+    kit.put(BOX, WHITE, M(gx, y + 5.3, gz, rot, 2.2, 2.2, 0.35), PLASTER);
+    kit.put(ARCH, "#e8e2d4", M(gx, y + 5.1, gz, rot, 0.55, 0.55, 3), STONE);
+    kit.put(new THREE.LatheGeometry([[0.05, 0], [0.18, -0.08], [0.24, -0.4], [0.3, -0.5], [0, -0.5]].map(([a, b]) => new THREE.Vector2(a, b)), 12), "#b98a3e", M(gx, y + 5.55, gz), METAL);
+    const [dx2, dz2] = F.at(0, 3.5);
+    doorAt(dx2, y + 0.3, dz2, rot, { color: BLUE, w: 1.2, h: 2.3, arch: true, lamp: true });
+    for (const k of [-1, 1]) {
+      const [wx, wz] = F.at(k * 2.5, 0.5);
+      windowAt(wx, y + 2.6, wz, rot + (k * Math.PI) / 2, 0.55, 1.1, { lit: true, trim: "#e8e2d4", shape: 2, box: false, shutter: BLUE });
+    }
+    addSolid({ x, z, hw: 2.5, hd: 3.5, rot, top: y + 4.55, surf: "roof" });
+    claim(x, z, 8);
+    places.chapel = [x, y, z];
+  }
+
+  // A clear, flat patch of meadow above the beach, for the balloon
+  {
+    let best = null, bd = Infinity;
+    for (let x = 30; x <= 190; x += 3) for (let z = -240; z <= -100; z += 3) {
+      const h = heightAt(x, z);
+      if (h < 5 || h > 45 || slopeAt(x, z) > 0.07 || pathDist(x, z) < 7 || field(x, z).village > 0.15 || !clear(x, z, 9)) continue;
+      const d = Math.hypot(x - 110, z + 150);
+      if (d < bd) { bd = d; best = [x, z]; }
+    }
+    const [x, z] = best || [110, -150];
+    claim(x, z, 9, 0.6);
+    places.balloon = [x, heightAt(x, z), z];
+  }
+
   places.spawn = [147, heightAt(147, 70), 70];
   places.glyph = [142, heightAt(142, 64.3), 64.3];
   places.islet = [ISLANDS[0][0], heightAt(ISLANDS[0][0], ISLANDS[0][1]), ISLANDS[0][1]];
 
   // ---------------------------------------------------------------- rocks
-  footprints.push([147, 70, 4], [places.glyph[0], places.glyph[2], 2.5]);
+  footprint(147, 70, 4);
+  footprint(places.glyph[0], places.glyph[2], 2.5);
   const rocks = [];
   for (let i = 0; i < 90000 && rocks.length < 1300; i++) {
     const x = -480 + r() * 860, z = -420 + r() * 680;
@@ -1137,72 +1391,145 @@ export function buildWorld(scene) {
   }
   createRocks(scene, rocks);
 
+  // ---------------------------------------------------------------- terraces
+  // Dry-stone walls holding up the terraces, traced along the hill at the
+  // foot of each step, with gaps to climb through; olives planted in rows
+  // along them, and on some, lavender.
+  {
+    const G = 3, S = TERRACE_STEP;
+    const rows = [];
+    for (let gx = -540; gx < 540; gx += G) for (let gz = -540; gz < 420; gz += G) {
+      if (coverAt(gx + G / 2, gz + G / 2).terrace < 0.45) continue;
+      const corners = [[gx, gz], [gx + G, gz], [gx + G, gz + G], [gx, gz + G]];
+      const hs = corners.map(([x, z]) => heightAt(x, z));
+      const lo = Math.min(...hs), hi = Math.max(...hs);
+      for (let k = Math.ceil((lo - 0.3) / S); k * S + 0.3 <= hi; k++) {
+        const L = k * S + 0.3;
+        const pts = [];
+        for (let e = 0; e < 4; e++) {
+          const a = hs[e] - L, b = hs[(e + 1) % 4] - L;
+          if ((a < 0) === (b < 0)) continue;
+          const t = a / (a - b), [ax, az] = corners[e], [bx, bz] = corners[(e + 1) % 4];
+          pts.push([ax + (bx - ax) * t, az + (bz - az) * t]);
+        }
+        if (pts.length < 2) continue;
+        const [[ax, az], [bx, bz]] = pts;
+        const mx = (ax + bx) / 2, mz = (az + bz) / 2, len = Math.hypot(bx - ax, bz - az);
+        if (len < 0.4 || pathDist(mx, mz) < 3.4 || noise(mx / 9 + 3, mz / 9 - 2) > 0.72) continue;
+        const ex = heightAt(mx + 1, mz) - heightAt(mx - 1, mz), ez = heightAt(mx, mz + 1) - heightAt(mx, mz - 1);
+        const el = Math.hypot(ex, ez) || 1, nx = ex / el, nz = ez / el;
+        const top = heightAt(mx + nx * 2.2, mz + nz * 2.2) + 0.25, foot = heightAt(mx - nx * 0.6, mz - nz * 0.6);
+        if (top - foot < 1 || !clear(mx, mz, 0.3)) continue;
+        const rot = Math.atan2(bx - ax, bz - az);
+        kit.put(BOX, hex("#cdbd9b").multiplyScalar(0.86 + r() * 0.22), M(mx, (top + foot - 0.8) / 2, mz, rot, 0.6, top - foot + 0.8, len + 0.35), DRY);
+        addSolid({ x: mx, z: mz, hw: 0.3, hd: len / 2 + 0.15, rot, top, surf: "stone" });
+        clearGround(mx, mz, 1.1, 0.5);
+        rows.push({ x: mx, z: mz, ux: (bx - ax) / len, uz: (bz - az) / len, nx, nz, len });
+      }
+    }
+    for (const w of rows) footprint(w.x, w.z, 0.8);
+    for (const w of rows) {
+      const lav = noise(w.x / 60 + 21, w.z / 60 - 5) > 0.6;
+      if (lav) {
+        for (const up of [1.7, 3.1, 4.5]) for (let a = -w.len / 2; a < w.len / 2; a += 1.05) {
+          const x = w.x + w.nx * up + w.ux * a, z = w.z + w.nz * up + w.uz * a;
+          if (!clear(x, z, 0.3)) continue;
+          plants.push({ kind: "lavender", x, z, y: heightAt(x, z) - 0.05, s: 0.85 + r() * 0.35, sy: 0.85 + r() * 0.35, ry: r() * 6.28, tint: 0.9 + r() * 0.2, v: r() });
+        }
+      } else if (r() < w.len / 6.5) {
+        const x = w.x + w.nx * (2.8 + r() * 0.6), z = w.z + w.nz * (2.8 + r() * 0.6);
+        if (!clear(x, z, 2.6)) continue;
+        plants.push({ kind: "olive", x, z, y: heightAt(x, z) - 0.2, s: 0.8 + r() * 0.4, ry: r() * 6.28, tint: 0.9 + r() * 0.2, v: r() });
+        footprint(x, z, 2);
+      }
+    }
+  }
+
   // ---------------------------------------------------------------- trees and bushes
+  // Woods of stone pine and oak in patches over the hills, the maquis
+  // between them, olives round the village, cypresses by the houses.
+  const lite = typeof matchMedia === "function" && matchMedia("(pointer: coarse)").matches && !matchMedia("(pointer: fine)").matches;
+  const K = lite ? 0.5 : 1;
   const scatter = (count, tries, test) => {
     const out = [];
     for (let i = 0; i < tries && out.length < count; i++) {
       const x = -560 + r() * 1120, z = -560 + r() * 1000;
       const f = field(x, z);
-      const p = test(x, z, f);
-      if (p) out.push({ x, z, y: heightAt(x, z), ry: r() * 6.28, tint: 0.88 + r() * 0.24, v: r(), ...p });
+      const p = test(x, z, f, coverAt(x, z));
+      if (!p) continue;
+      out.push({ x, z, y: heightAt(x, z), ry: r() * 6.28, tint: 0.88 + r() * 0.24, v: r(), ...p });
+      if (p.room) footprint(x, z, p.room);
     }
     return out;
   };
   const inVillage = (f) => f.village > 0.2;
-  plants.push(...scatter(150, 20000, (x, z, f) => {
+  plants.push(...scatter(260 * K, 30000, (x, z, f) => {
     if (f.d < 7 || f.path > 0.1 || f.h > 160 || !clear(x, z, 1.5) || slopeAt(x, z) > 0.5) return null;
     const want = inVillage(f) ? 0.5 : (f.north > 0.1 && noise(x / 40, z / 40) > 0.62 ? 0.25 : 0.015);
-    return r() < want ? { kind: "cypress", s: 0.75 + r() * 0.5, y: heightAt(x, z) - 0.2 } : null;
+    return r() < want ? { kind: "cypress", s: 0.75 + r() * 0.5, y: heightAt(x, z) - 0.2, room: 1.2 } : null;
   }));
   // A row of cypresses up the path to the church, as the painting has them
   for (let k = 0; k < 7; k++) {
     const x = 240 + k * 3.6 + 2.5, z = -36 - k * 2.4 - 2;
     if (clear(x, z, 1.2)) plants.push({ kind: "cypress", x, z, y: heightAt(x, z) - 0.2, s: 1.05 + r() * 0.25, ry: r() * 6, tint: 1 });
   }
-  plants.push(...scatter(320, 30000, (x, z, f) => {
-    if (f.d < 5 || f.path > 0.1 || f.h > 200 || !clear(x, z, 3.5) || slopeAt(x, z) > 0.55) return null;
-    const want = (f.north > 0.05 ? 0.4 : 0.12) * smooth(0.35, 0.6, noise(x / 70 + 3, z / 70)) + (f.island ? 0.6 : 0);
-    return r() < want && !inVillage(f) ? { kind: "pine", s: 0.75 + r() * 0.5, y: heightAt(x, z) - 0.3 } : null;
+  plants.push(...scatter(1800 * K, 70000, (x, z, f, cv) => {
+    if (f.d < 5 || f.path > 0.1 || f.h > 230 || inVillage(f) || slopeAt(x, z) > 0.55 || !clear(x, z, 2.4)) return null;
+    // in stands, with glades between them
+    const stand = smooth(0.32, 0.62, noise(x / 26 + 11, z / 26 - 4));
+    const want = cv.wood * (f.north > 0.05 || f.island ? 0.8 : 0.55) * stand + (f.island ? 0.35 : 0) + 0.015 + smooth(26, 8, f.d) * 0.05;
+    return r() < want ? { kind: "pine", s: 0.75 + r() * 0.5, y: heightAt(x, z) - 0.3, room: 1.2 } : null;
+  }));
+  plants.push(...scatter(1300 * K, 60000, (x, z, f, cv) => {
+    if (f.d < 10 || f.path > 0.1 || f.h < 6 || f.h > 280 || inVillage(f) || slopeAt(x, z) > 0.5 || !clear(x, z, 2.4)) return null;
+    const stand = smooth(0.3, 0.6, noise(x / 30 - 7, z / 30 + 13));
+    const want = cv.wood * 0.7 * smooth(6, 40, f.h) * stand + 0.03 * smooth(0.45, 0.65, noise(x / 50 - 3, z / 50 + 1));
+    return r() < want ? { kind: "oak", s: 0.8 + r() * 0.5, y: heightAt(x, z) - 0.3, room: 1.2 } : null;
   }));
   // Stone pines on the headland, like the ones by the painting's lighthouse
   for (const [x, z] of [[-178, -40], [-205, -36], [-168, -70], [-214, -60], [-150, -96]]) {
     if (clear(x, z, 2.5) && heightAt(x, z) > 1.5) plants.push({ kind: "pine", x, z, y: heightAt(x, z) - 0.3, s: 0.85 + r() * 0.3, ry: r() * 6, tint: 1 });
   }
-  plants.push(...scatter(260, 20000, (x, z, f) => {
-    if (f.d < 6 || f.path > 0.1 || !clear(x, z, 2.2) || slopeAt(x, z) > 0.5) return null;
-    const want = inVillage(f) ? 0.55 : (f.h < 70 && f.north < 0.4 ? 0.12 : 0);
-    return r() < want ? { kind: "olive", s: 0.8 + r() * 0.45, y: heightAt(x, z) - 0.2 } : null;
-  }));
-  plants.push(...scatter(220, 20000, (x, z, f) => {
-    if (f.d < 12 || f.path > 0.1 || f.h < 25 || f.h > 260 || !clear(x, z, 3) || slopeAt(x, z) > 0.5) return null;
-    return r() < 0.35 * smooth(0.45, 0.65, noise(x / 50 - 3, z / 50 + 1)) ? { kind: "oak", s: 0.8 + r() * 0.5, y: heightAt(x, z) - 0.3 } : null;
+  plants.push(...scatter(520 * K, 30000, (x, z, f, cv) => {
+    if (f.d < 6 || f.path > 0.1 || slopeAt(x, z) > 0.5 || !clear(x, z, 2.2)) return null;
+    const want = inVillage(f) ? 0.55 : (f.h < 80 && f.north < 0.4 ? 0.1 + cv.meadow * 0.12 : 0) * (1 - cv.wood);
+    return r() < want ? { kind: "olive", s: 0.8 + r() * 0.45, y: heightAt(x, z) - 0.2, room: 1.2 } : null;
   }));
   // Palms, a few, by the beach and the plaza
   for (const [x, z] of [[150, -44], [155, -18], [196, -2], [214, 0], [160, 8], [146, -62]]) {
     if (clear(x, z, 1)) plants.push({ kind: "palm", x, z, y: heightAt(x, z) - 0.2, s: 0.9 + r() * 0.25, ry: r() * 6, tint: 1 });
   }
   for (const p of plants) if (["pine", "cypress", "olive", "oak", "palm"].includes(p.kind)) {
-    footprints.push([p.x, p.z, 1.2]);
+    footprint(p.x, p.z, 1.2);
     addSolid({ x: p.x, z: p.z, r: 0.32 * p.s, top: p.y + 30, surf: "wood" });
   }
+  // Garden bushes round the village, some in flower
   const bushes = [];
-  for (let i = 0; i < 70000 && bushes.length < 3600; i++) {
-    const near = i % 3 !== 0;
-    const x = near ? -300 + r() * 640 : -560 + r() * 1120, z = near ? -360 + r() * 520 : -560 + r() * 1000;
+  for (let i = 0; i < 40000 && bushes.length < 1500 * K; i++) {
+    const x = 120 + r() * 220, z = -170 + r() * 270;
     const f = field(x, z);
-    if (f.h < 1 || f.h > 220 || f.path > 0.25 || (f.beach > 0.6 && f.h < 3) || !clear(x, z, 0.8)) continue;
-    if (noise(x / 26 + 7, z / 26) < 0.46 || slopeAt(x, z) > 0.6) continue;
-    const flower = r() < (inVillage(f) ? 0.4 : 0.1) ? 1 + Math.floor(r() * 4) : 0;
+    if (f.h < 1 || f.path > 0.25 || (f.beach > 0.6 && f.h < 3) || f.village < 0.1 || slopeAt(x, z) > 0.6 || !clear(x, z, 0.8)) continue;
+    if (noise(x / 26 + 7, z / 26) < 0.42) continue;
+    const flower = r() < 0.45 ? 1 + Math.floor(r() * 4) : 0;
     bushes.push({ kind: "bush", x, z, y: heightAt(x, z) - 0.1, s: 0.55 + r() * 1.1, sy: 0.75 + r() * 0.4, ry: r() * 6.28, tint: 0.85 + r() * 0.3, v: r(), flower });
+    footprint(x, z, 0.6);
   }
   plants.push(...bushes);
+  // The maquis: lentisk, myrtle, broom and rock-rose, thick over the hills
+  plants.push(...scatter(26000 * K, 160000, (x, z, f, cv) => {
+    if (f.h < 1.2 || f.path > 0.2 || f.village > 0.35 || (f.beach > 0.5 && f.h < 3.5) || slopeAt(x, z) > 0.75) return null;
+    const want = cv.scrub * 0.95 + cv.wood * 0.3 + 0.025;
+    if (r() > want || !clear(x, z, 0.8)) return null;
+    const s = 0.7 + r() * 0.9;
+    return { kind: "scrub", y: heightAt(x, z) - 0.15, s, sy: 0.7 + r() * 0.5, tint: 0.85 + r() * 0.3, flower: r() < 0.12 ? 1 + Math.floor(r() * 3) : 0, room: 0.6 * s };
+  }));
   // Woods on the far hills
   let woods = 0;
-  for (let i = 0; i < 90000 && woods < 7000; i++) {
+  for (let i = 0; i < 160000 && woods < 12000 * K; i++) {
     const x = -3200 + r() * 6400, z = -3000 + r() * 6000;
     if (Math.abs(x + 20) < 560 && Math.abs(z + 80) < 560) continue;
     const f = field(x, z);
-    if (f.d < 14 || f.h < 6 || f.h > 700 || noise(x / 140, z / 140) < (f.island ? 0.35 : 0.5)) continue;
+    if (f.d < 14 || f.h < 6 || f.h > 700 || noise(x / 140, z / 140) < (f.island ? 0.35 : 0.45)) continue;
     woods++;
     plants.push({ kind: "far", x, z, y: heightAt(x, z) - 1, s: 4 + r() * 5, sy: 1.1 + r() * 0.5, ry: r() * 6, tint: 0.75 + r() * 0.4 });
   }
@@ -1253,7 +1580,7 @@ export function buildWorld(scene) {
   clothMesh.layers.enable(1);
   scene.add(clothMesh);
 
-  return { places, windows, glows, boats, plants, foam, materials: { built: mat, boat: boatMat }, gozzo };
+  return { places, windows, glows, bulbs, boats, plants, foam, windmill, materials: { built: mat, boat: boatMat }, gozzo };
 }
 
 // Cloth stirs in the wind: washing, awnings, parasols and sails.
@@ -1276,7 +1603,7 @@ function clothMaterial() {
 // and sharp edges that real limestone breaks into, then roughened a little.
 function rockGeometry(seed) {
   const rr = rng(seed);
-  const g = new THREE.IcosahedronGeometry(1, 4);
+  const g = new THREE.IcosahedronGeometry(1, 3);
   const p = g.attributes.position, v = new THREE.Vector3();
   const cuts = Array.from({ length: 7 }, () => {
     const n = new THREE.Vector3(rr() * 2 - 1, rr() * 1.4 - 0.5, rr() * 2 - 1).normalize();
@@ -1423,6 +1750,45 @@ export function createWindows(list) {
   const mesh = new THREE.Mesh(geo, mat);
   mesh.layers.enable(1);
   return { mesh, uniforms };
+}
+
+// The bulbs on the strings of lights: pale glass by day, warm (and here and
+// there coloured) by night.
+export function createBulbs(list) {
+  const geo = new THREE.IcosahedronGeometry(0.075, 1);
+  const uniforms = { uTime: U.uTime, uNight: U.uNight, uSunDir: U.uSunDir, uFogColor: U.uFogColor, uFogGlow: U.uFogGlow, uFogDensity: U.uFogDensity, uFogFalloff: U.uFogFalloff };
+  const mat = new THREE.ShaderMaterial({
+    uniforms,
+    vertexShader: /* glsl */ `
+      varying vec3 vW;
+      varying float vS;
+      void main() {
+        vec4 w = modelMatrix * instanceMatrix * vec4(position, 1.);
+        vW = w.xyz;
+        vS = fract(sin(dot(instanceMatrix[3].xz, vec2(12.9898, 78.233))) * 43758.5453);
+        gl_Position = projectionMatrix * viewMatrix * w;
+      }`,
+    fragmentShader: /* glsl */ `
+      uniform float uNight, uTime;
+      varying vec3 vW;
+      varying float vS;
+      ${NOISE}
+      ${FOG}
+      void main() {
+        float on = smoothstep(0.1, 0.45, uNight);
+        vec3 warm = vS < 0.7 ? vec3(4., 2.5, 1.1) : vS < 0.8 ? vec3(4., 0.9, 0.5) : vS < 0.9 ? vec3(1.2, 3.2, 1.2) : vec3(1.2, 1.8, 4.);
+        warm *= 0.88 + 0.12 * sin(uTime * (2. + vS * 3.) + vS * 60.);
+        vec3 c = mix(vec3(0.85, 0.83, 0.76), warm, on);
+        gl_FragColor = vec4(applyFog(c, vW), 1.);
+      }`,
+  });
+  const mesh = new THREE.InstancedMesh(geo, mat, Math.max(1, list.length));
+  const m = new THREE.Matrix4();
+  list.forEach(([x, y, z], i) => mesh.setMatrixAt(i, m.makeTranslation(x, y, z)));
+  mesh.count = list.length;
+  mesh.computeBoundingSphere();
+  mesh.layers.enable(1);
+  return { mesh };
 }
 
 // Soft lights that only show at night: lit windows, far towns, lamps.

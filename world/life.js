@@ -493,3 +493,100 @@ export function createCats(spots) {
   const petted = (c) => { c.pet = 3.5; c.follow = 40; c.state = "sit"; c.target = null; c.t = 3.5; };
   return { group, cats, update, petted };
 }
+
+// A pod of dolphins that crosses the bay where you can see it, leaping
+// one after another, splashing as they go in and come out.
+function dolphinGeometry() {
+  const pos = [], col = [];
+  const dark = new THREE.Color("#3a4a58"), pale = new THREE.Color("#c9d2d6"), c = new THREE.Color();
+  const body = new THREE.LatheGeometry([[0.001, -1.15], [0.05, -1.08], [0.1, -0.9], [0.2, -0.5], [0.29, 0], [0.3, 0.25], [0.25, 0.7], [0.17, 0.92], [0.07, 1.06], [0.05, 1.18], [0.001, 1.25]]
+    .map(([a, b]) => new THREE.Vector2(a, b)), 14).toNonIndexed();
+  body.rotateX(Math.PI / 2);
+  const p = body.attributes.position;
+  for (let i = 0; i < p.count; i++) {
+    pos.push(p.getX(i), p.getY(i) * 0.92, p.getZ(i));
+    c.copy(pale).lerp(dark, Math.min(1, Math.max(0, p.getY(i) / 0.3 * 0.9 + 0.55)));
+    col.push(c.r, c.g, c.b);
+  }
+  const tri = (a, b, d, color) => {
+    pos.push(...a, ...b, ...d);
+    for (let i = 0; i < 3; i++) col.push(color.r, color.g, color.b);
+  };
+  // dorsal fin, flukes, flippers
+  tri([0, 0.24, 0.12], [0, 0.6, -0.22], [0, 0.24, -0.34], dark);
+  for (const s of [-1, 1]) {
+    tri([0, 0, -1.02], [0.46 * s, 0.02, -1.36], [0.1 * s, 0, -1.2], dark);
+    tri([0.2 * s, -0.12, 0.5], [0.46 * s, -0.3, 0.22], [0.22 * s, -0.12, 0.3], dark);
+  }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
+  geo.computeVertexNormals();
+  return geo;
+}
+
+export function createDolphins(count = 4) {
+  const mat = stylize(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }), { key: "dolphin", defines: { RIM: "0.4", WRAP: "0.2" } });
+  const mesh = new THREE.InstancedMesh(dolphinGeometry(), mat, count);
+  mesh.castShadow = true;
+  mesh.frustumCulled = false;
+  mesh.layers.enable(1);
+  const pod = { from: new THREE.Vector3(-60, 0, -80), dir: new THREE.Vector3(1, 0, 0), len: 140, went: 0, t: 0, rest: 0 };
+  const deep = (x, z) => heightAt(x, z) < -4.5;
+  // A route across the water in front of you, deep all the way
+  const route = (cam, yaw) => {
+    for (let k = 0; k < 40; k++) {
+      const a = yaw + (Math.random() - 0.5) * 1.6, d = 60 + Math.random() * 130;
+      const mx = cam.x - Math.sin(a) * d, mz = cam.z - Math.cos(a) * d;
+      const across = a + Math.PI / 2 + (Math.random() - 0.5) * 0.8, len = 90 + Math.random() * 70;
+      const dx = -Math.sin(across), dz = -Math.cos(across);
+      const sx = mx - dx * len / 2, sz = mz - dz * len / 2;
+      let ok = true;
+      for (let i = 0; i <= 8 && ok; i++) ok = deep(sx + dx * len * i / 8, sz + dz * len * i / 8);
+      if (!ok) continue;
+      pod.from.set(sx, 0, sz);
+      pod.dir.set(dx, 0, dz);
+      pod.len = len;
+      pod.went = 0;
+      return true;
+    }
+    return false;
+  };
+  const was = new Float32Array(count).fill(9);
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), p = new THREE.Vector3(), s = new THREE.Vector3();
+  const update = (dt, cam, yaw, events) => {
+    pod.t += dt;
+    if (pod.rest > 0) {
+      // between passes, they're out of sight
+      pod.rest -= dt;
+      if (pod.rest <= 0 && !route(cam, yaw)) pod.rest = 6;
+      for (let i = 0; i < count; i++) mesh.setMatrixAt(i, m.makeScale(0, 0, 0));
+      mesh.instanceMatrix.needsUpdate = true;
+      return;
+    }
+    pod.went += dt * 6;
+    if (pod.went > pod.len) { pod.rest = 12 + Math.random() * 18; return; }
+    const heading = Math.atan2(pod.dir.x, pod.dir.z);
+    for (let i = 0; i < count; i++) {
+      const side = (i - (count - 1) / 2) * 2.4, back = Math.abs(i - (count - 1) / 2) * 2 + (i % 2) * 1.3;
+      const along = pod.went - back;
+      const cyc = (pod.t * 0.85 + i * 0.41 + i * i * 0.17) % 2.4;
+      const leap = cyc < 1.05 && along > 0 && along < pod.len;
+      const x = pod.from.x + pod.dir.x * along + pod.dir.z * side, z = pod.from.z + pod.dir.z * along - pod.dir.x * side;
+      if (leap) {
+        const k = cyc / 1.05;
+        p.set(x, Math.sin(Math.PI * k) * (1.3 + 0.3 * (i % 2)) - 0.45, z);
+        e.set(-Math.cos(Math.PI * k) * 0.85, heading, Math.sin(pod.t + i) * 0.1, "YXZ");
+        mesh.setMatrixAt(i, m.compose(p, q.setFromEuler(e), s.setScalar(1 + (i % 3) * 0.08)));
+        if (was[i] >= 1.05) events?.splash(x - pod.dir.x * 0.8, z - pod.dir.z * 0.8, 0.7);
+      } else {
+        mesh.setMatrixAt(i, m.makeScale(0, 0, 0));
+        if (was[i] < 1.05 && along > 0) events?.splash(x, z, 0.9);
+      }
+      was[i] = leap ? cyc : 9;
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+    if (Math.random() < dt * 0.4) events?.call(pod.from.clone().addScaledVector(pod.dir, pod.went));
+  };
+  return { mesh, update, pod };
+}

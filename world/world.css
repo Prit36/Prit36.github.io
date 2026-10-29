@@ -98,6 +98,23 @@ button { font: inherit; color: inherit; }
 .map-wrap[hidden] { display: none; }
 .map { width: min(86vh, 92vw); height: min(86vh, 92vw); border-radius: 3px; box-shadow: 0 20px 60px rgb(0 0 0 / 0.45); rotate: 0.8deg; }
 
+/* A postcard of the view, held up to look at */
+.postcard {
+  position: fixed; inset: 0; display: grid; place-items: center; padding: 16px;
+  background: rgb(10 14 30 / 0.55); -webkit-backdrop-filter: blur(3px); backdrop-filter: blur(3px);
+}
+.postcard[hidden] { display: none; }
+.postcard-card { margin: 0; display: grid; gap: 14px; justify-items: center; }
+.postcard-card img {
+  display: block; width: min(980px, 88vw, calc((100vh - 120px) * 1.5)); aspect-ratio: 3 / 2; border-radius: 2px;
+  background: var(--paper); box-shadow: 0 24px 70px rgb(0 0 0 / 0.5); rotate: -1.2deg;
+  animation: card-develop 0.7s cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+@keyframes card-develop { from { opacity: 0; scale: 0.94; rotate: 2deg; } }
+.postcard-bar { display: flex; gap: 10px; }
+.postcard-bar .chip { padding: 0.7em 1.2em; font-size: 13px; text-decoration: none; cursor: pointer; }
+.postcard-bar a.chip { background: var(--paper); color: var(--ink); }
+
 /* The way in, and the pause */
 .intro {
   position: fixed; inset: 0; display: grid; place-items: center; padding: 16px;
@@ -137,10 +154,11 @@ button { font: inherit; color: inherit; }
   background: rgb(14 18 34 / 0.25); border: 1px solid rgb(255 255 255 / 0.3); pointer-events: none;
 }
 .stick i { position: absolute; left: 50%; top: 50%; width: 46px; height: 46px; margin: -23px; border-radius: 50%; background: rgb(255 255 255 / 0.55); }
-#t-jump, #t-hours, #t-map { position: absolute; right: 24px; pointer-events: auto; padding: 0.8em 1.2em; font-size: 13px; }
+#t-jump, #t-hours, #t-map, #t-card { position: absolute; right: 24px; pointer-events: auto; padding: 0.8em 1.2em; font-size: 13px; }
 #t-jump { bottom: 30px; padding: 1.4em 1.6em; }
 #t-hours { bottom: 110px; }
 #t-map { bottom: 160px; }
+#t-card { bottom: 210px; }
 
 .noscript { position: fixed; inset: 0; display: grid; place-items: center; font-size: 20px; }
 .noscript a { color: #fff; }
