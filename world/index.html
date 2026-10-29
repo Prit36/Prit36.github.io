@@ -18,33 +18,35 @@
   <script type="importmap">{ "imports": { "three": "https://cdn.jsdelivr.net/npm/three@0.160.0/build/three.module.min.js" } }</script>
 </head>
 <body>
-  <canvas id="world" tabindex="-1"></canvas>
+  <canvas id="world" tabindex="-1" aria-label="The bay, drawn in 3D"></canvas>
 
   <div class="hud" id="hud" hidden>
     <p class="chip clock mono" id="clock"></p>
     <div class="compass mono" id="compass" aria-hidden="true"></div>
-    <div class="chip tally mono" id="tally"><span id="tally-text"></span><span class="dots" id="dots"></span></div>
+    <div class="chip tally mono" id="tally"><span id="tally-text"></span><span class="dots" id="dots" aria-hidden="true"></span></div>
     <i class="aim" id="aim"></i>
-    <p class="toast mono" id="toast" role="status"></p>
+    <p class="toast mono" id="toast" role="status" aria-live="polite"></p>
     <button class="chip prompt mono" id="prompt" type="button" hidden></button>
-    <article class="card" id="card" hidden>
+    <article class="card" id="card" hidden aria-live="polite">
       <p class="card-kicker mono" id="card-kicker"></p>
       <h2 class="card-title" id="card-title"></h2>
       <p class="card-body" id="card-body"></p>
       <p class="card-foot mono" id="card-foot"></p>
     </article>
+    <p class="chip hints mono" id="hints"><kbd>Tab</kbd> map <kbd>P</kbd> postcard <kbd>M</kbd> sound <kbd>Scroll</kbd> hours <kbd>Esc</kbd> menu</p>
     <div class="touch" id="touch" hidden>
       <div class="stick" id="stick"><i></i></div>
+      <button class="chip mono" id="t-menu" type="button" aria-label="Menu and settings">Menu</button>
       <button class="chip mono" id="t-jump" type="button">Jump</button>
-      <button class="chip mono" id="t-hours" type="button">+1 h</button>
-      <button class="chip mono" id="t-map" type="button">Map</button>
-      <button class="chip mono" id="t-card" type="button">Postcard</button>
+      <button class="chip mono" id="t-hours" type="button" aria-label="Turn the sky an hour on">+1 h</button>
+      <button class="chip mono" id="t-map" type="button" aria-label="Show the map">Map</button>
+      <button class="chip mono" id="t-card" type="button" aria-label="Make a postcard of this view">Postcard</button>
     </div>
   </div>
 
-  <div class="map-wrap" id="map-wrap" hidden><canvas class="map" id="map" width="900" height="900"></canvas></div>
+  <div class="map-wrap" id="map-wrap" hidden><canvas class="map" id="map" width="900" height="900" role="img" aria-label="A map of the bay, with the lanterns still to light"></canvas></div>
 
-  <div class="postcard" id="postcard" hidden>
+  <div class="postcard" id="postcard" hidden role="dialog" aria-modal="true" aria-label="Your postcard">
     <figure class="postcard-card">
       <img id="postcard-img" alt="A postcard of the bay, painted from where you stood">
       <figcaption class="postcard-bar mono">
@@ -54,30 +56,74 @@
     </figure>
   </div>
 
-  <section class="intro" id="intro">
+  <section class="intro" id="intro" aria-labelledby="intro-title">
     <div class="intro-card">
       <p class="kicker mono">Prit Prajapati · <a href="../">back to the page</a></p>
-      <h1>Step into the painting</h1>
+      <h1 id="intro-title">Step into the painting</h1>
       <p class="lede">The bay from the banner on my page, as a place you can walk around. It keeps Surat's hours, the way the banner does: right now it is <span id="intro-time">some hour</span>.</p>
       <p class="lede">Eleven paper lanterns are hidden around the bay, one for each project I've built this year. Find them and light them.</p>
       <button class="go" id="go" type="button" disabled>Painting the bay…</button>
-      <p class="error mono" id="error" hidden></p>
+      <p class="error mono" id="error" role="alert" hidden></p>
       <dl class="keys mono" id="keys">
         <div><dt>Mouse</dt><dd>look around</dd></div>
-        <div><dt>W A S D</dt><dd>walk, Shift to run</dd></div>
-        <div><dt>Space</dt><dd>jump; hold it in the air to float down under a parasol</dd></div>
-        <div><dt>E</dt><dd>light a lantern, climb a tower, row the boat, fly the balloon, set off the fireworks, swing, stroke a cat</dd></div>
-        <div><dt>Click</dt><dd>skip a stone</dd></div>
-        <div><dt>Scroll</dt><dd>turn the hours; N for now, T to watch a whole day</dd></div>
-        <div><dt>P</dt><dd>make a postcard of what you're looking at</dd></div>
-        <div><dt>Tab</dt><dd>map</dd></div>
-        <div><dt>M · H</dt><dd>sound · hide all this</dd></div>
+        <div><dt>W A S D</dt><dd>walk; Shift to run, Space to jump</dd></div>
+        <div><dt>E</dt><dd>whatever the glowing dot is on: a lantern, a boat, a bench, a cat…</dd></div>
       </dl>
-      <p class="small mono"><button class="link" id="reset" type="button" hidden>Put the lanterns out and start again</button></p>
+      <p class="keys-touch mono">Left thumb to walk, right thumb to look. Tap what you want to use.</p>
+      <details class="more mono">
+        <summary>All the controls</summary>
+        <dl class="keys">
+          <div><dt>Space</dt><dd>jump; hold it in the air to float down under a parasol</dd></div>
+          <div><dt>E</dt><dd>light a lantern, climb a tower, row the boat, fly the balloon, swing, sit on the bench, ring a bell, toss a coin, stroke a cat</dd></div>
+          <div><dt>Click</dt><dd>skip a stone</dd></div>
+          <div><dt>Scroll</dt><dd>turn the hours; N for now, T to watch a whole day</dd></div>
+          <div><dt>Tab</dt><dd>map</dd></div>
+          <div><dt>P</dt><dd>make a postcard of what you're looking at</dd></div>
+          <div><dt>R</dt><dd>back to the nearest path, if you get stuck</dd></div>
+          <div><dt>M · H</dt><dd>sound · hide all this</dd></div>
+          <div><dt>Esc</dt><dd>this menu</dd></div>
+        </dl>
+      </details>
+      <div class="settings mono" role="group" aria-label="Settings">
+        <button class="toggle" id="set-sound" type="button" aria-pressed="true">Sound</button>
+        <button class="toggle" id="set-calm" type="button" aria-pressed="false" title="No head bob, sway or zoom">Steady camera</button>
+        <label class="detail">Detail
+          <select id="set-detail">
+            <option value="auto">Auto</option>
+            <option value="3">High</option>
+            <option value="2">Medium</option>
+            <option value="1">Low</option>
+            <option value="0">Lowest</option>
+          </select>
+        </label>
+      </div>
+      <p class="small mono">
+        <button class="link" id="unstick" type="button" hidden>Back to the nearest path</button>
+        <button class="link" id="reset" type="button" hidden>Put the lanterns out and start again</button>
+      </p>
     </div>
   </section>
 
   <noscript><p class="noscript">The bay needs JavaScript. <a href="../">Back to the page</a>.</p></noscript>
+  <script>
+    // If the bay can't load (no connection to the library it's drawn with,
+    // or something broken), say so, rather than painting forever.
+    (() => {
+      const say = (msg) => {
+        const go = document.getElementById("go"), err = document.getElementById("error");
+        if (window.__bayReady || !err.hidden) return;
+        go.textContent = "Can't paint the bay here";
+        err.hidden = false;
+        err.textContent = msg;
+      };
+      window.addEventListener("error", (e) => {
+        if (e.target && e.target.tagName === "SCRIPT") say("Part of the bay didn't download. Check the connection and reload.");
+        else say("Something went wrong painting the bay. Reloading may help.");
+      }, true);
+      window.addEventListener("unhandledrejection", () => say("Something went wrong painting the bay. Reloading may help."));
+      setTimeout(() => { if (!window.__bayReady && document.getElementById("error").hidden) document.getElementById("go").textContent = "Still painting… (a slow connection, or a slow machine)"; }, 20000);
+    })();
+  </script>
   <script type="module" src="main.js"></script>
 </body>
 </html>

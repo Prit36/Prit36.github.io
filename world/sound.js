@@ -1,6 +1,8 @@
 // Every sound in the bay is made here, from noise and sine waves: the sea,
-// the wind, cicadas by day and crickets by night, the bell, the lanterns'
-// chimes, stones skipping, footsteps. Nothing is downloaded.
+// the wind, leaves, cicadas by day and crickets and an owl by night, the
+// fountain, the bells, the lanterns' chimes, gulls, stones skipping,
+// footsteps. Nothing is downloaded. Sounds that come from somewhere are
+// placed left or right, and fall away with distance.
 
 export function createSound() {
   let ctx = null, master = null, noise = null;
@@ -71,13 +73,36 @@ export function createSound() {
     beds.cricketTone.connect(beds.chirp).connect(beds.cricket).connect(master);
     beds.cricketTone.start();
     beds.nextChirp = 0;
+    // Leaves: a high hush that rises and falls with the gusts
+    beds.leaves = gain();
+    beds.leafBand = filter("bandpass", 4200, 0.7);
+    source().connect(filter("highpass", 2200, 0.5)).connect(beds.leafBand).connect(beds.leaves).connect(master);
+    // The fountain: water falling into water
+    beds.fountain = gain();
+    beds.fountainPan = ctx.createStereoPanner ? ctx.createStereoPanner() : null;
+    source().connect(filter("bandpass", 1300, 0.9)).connect(beds.fountain);
+    (beds.fountainPan ? beds.fountain.connect(beds.fountainPan) : beds.fountain).connect(master);
+    beds.nextLap = 0;
   };
 
   const set = (g, v, k = 0.4) => g && g.gain.setTargetAtTime(v, ctx.currentTime, k);
 
   // Called every frame with what the place sounds like right now.
-  const update = (t, { shore, high, wind, day, night, trees }) => {
+  const update = (t, { shore, high, wind, day, night, trees, gust = 1, fountain = 0, fountainPan = 0, lap = 0 }) => {
     if (!ctx || ctx.state !== "running") return;
+    set(beds.leaves, 0.03 * trees * (0.25 + 0.75 * gust * gust) * (1 - high * 0.5), 0.5);
+    beds.leafBand.frequency.setTargetAtTime(3400 + 1600 * gust, ctx.currentTime, 0.6);
+    set(beds.fountain, 0.09 * fountain, 0.3);
+    if (beds.fountainPan) beds.fountainPan.pan.setTargetAtTime(fountainPan * 0.8, ctx.currentTime, 0.1);
+    // a wave arriving on the sand, and drawing back over it
+    if (lap > 0.05 && ctx.currentTime > beds.nextLap) {
+      const at = ctx.currentTime + 0.02, k = lap * (0.6 + Math.random() * 0.4);
+      const f = burst("lowpass", 700, 0.6, 0.12 * k, 1.4, at, 0.35);
+      f.frequency.exponentialRampToValueAtTime(2600, at + 0.5);
+      f.frequency.exponentialRampToValueAtTime(500, at + 1.6);
+      burst("highpass", 3500, 0.5, 0.025 * k, 1.8, at + 0.6, 0.6);
+      beds.nextLap = at + 5 + Math.random() * 2.5;
+    }
     const swell = 0.62 + 0.38 * Math.sin(t * 0.45) * Math.sin(t * 0.17 + 1);
     set(beds.waves, (0.05 + 0.32 * shore) * swell * (1 - high * 0.6), 0.3);
     beds.waveLow.frequency.setTargetAtTime(380 + 520 * swell * shore, ctx.currentTime, 0.3);
@@ -115,16 +140,24 @@ export function createSound() {
     o.stop(at + attack + decay + 0.05);
     return o;
   };
-  const burst = (type, freq, Q, peak, decay, at = ctx.currentTime) => {
+  const burst = (type, freq, Q, peak, decay, at = ctx.currentTime, attack = 0.004, out = master) => {
     const s = ctx.createBufferSource();
     s.buffer = noise;
     const f = filter(type, freq, Q);
     const g = gain();
-    env(g, at, peak, 0.004, decay);
-    s.connect(f).connect(g).connect(master);
+    env(g, at, peak, attack, decay);
+    s.connect(f).connect(g).connect(out);
     s.start(at, Math.random() * 1.5);
-    s.stop(at + decay + 0.1);
+    s.stop(at + attack + decay + 0.1);
     return f;
+  };
+  // Somewhere off to the left or right (-1 to 1)
+  const side = (pan = 0) => {
+    if (!pan || !ctx.createStereoPanner) return master;
+    const p = ctx.createStereoPanner();
+    p.pan.value = Math.max(-1, Math.min(1, pan));
+    p.connect(master);
+    return p;
   };
   const ready = () => ctx && ctx.state === "running";
   const far = (dist) => 1 / (1 + Math.max(0, dist) / 22);
@@ -142,11 +175,11 @@ export function createSound() {
       if (master) master.gain.setTargetAtTime(muted ? 0 : 0.85, ctx.currentTime, 0.05);
       return muted;
     },
-    bell(dist = 0, volume = 1) {
+    bell(dist = 0, volume = 1, pan = 0, pitch = 1) {
       if (!ready()) return;
-      const k = far(dist) * 0.5 * volume, at = ctx.currentTime;
-      for (const [ratio, g, d] of PARTIALS) tone(196 * ratio, g * k, d, "sine", at, 0.003);
-      burst("bandpass", 2400, 2, 0.3 * k, 0.08, at);
+      const k = far(dist) * 0.5 * volume, at = ctx.currentTime, out = side(pan * 0.7);
+      for (const [ratio, g, d] of PARTIALS) tone(196 * pitch * ratio, g * k, d / Math.sqrt(pitch), "sine", at, 0.003, out);
+      burst("bandpass", 2400 * pitch, 2, 0.3 * k, 0.08, at, 0.004, out);
     },
     chime(i, at = 0) {
       if (!ready()) return;
@@ -160,6 +193,9 @@ export function createSound() {
       if (!ready()) return;
       const f = burst("lowpass", 300, 0.8, 0.18, 0.5);
       f.frequency.exponentialRampToValueAtTime(1600, ctx.currentTime + 0.3);
+      // and it settles to a soft flutter
+      const g = burst("bandpass", 600, 0.9, 0.05, 1.2, ctx.currentTime + 0.25, 0.2);
+      g.frequency.linearRampToValueAtTime(420, ctx.currentTime + 1.4);
     },
     plip(n) {
       if (!ready()) return;
@@ -167,10 +203,17 @@ export function createSound() {
       o.frequency.exponentialRampToValueAtTime((620 + n * 70) * 0.65, ctx.currentTime + 0.1);
       burst("highpass", 3000, 0.7, 0.05, 0.05);
     },
-    splash(size = 1, dist = 0) {
+    splash(size = 1, dist = 0, pan = 0) {
       if (!ready()) return;
-      const f = burst("lowpass", 1800, 0.7, 0.3 * size * far(dist), 0.35 + 0.3 * size);
-      f.frequency.exponentialRampToValueAtTime(260, ctx.currentTime + 0.5);
+      const out = side(pan * 0.8), at = ctx.currentTime;
+      const f = burst("lowpass", 1800, 0.7, 0.3 * size * far(dist), 0.35 + 0.3 * size, at, 0.004, out);
+      f.frequency.exponentialRampToValueAtTime(260, at + 0.5);
+      // and the drops coming back down
+      for (let i = 0; i < 2 + size * 4; i++) {
+        const d = at + 0.15 + Math.random() * 0.4;
+        const o = tone(900 + Math.random() * 1400, 0.025 * size * far(dist), 0.05, "sine", d, 0.002, out);
+        o.frequency.exponentialRampToValueAtTime(400, d + 0.06);
+      }
     },
     clack(dist = 0) { if (ready()) burst("bandpass", 2200, 3, 0.18 * far(dist), 0.06); },
     step(surface) {
@@ -189,11 +232,11 @@ export function createSound() {
       const o = tone(300, 0.22 * far(dist), 0.3, "sine");
       o.frequency.exponentialRampToValueAtTime(140, ctx.currentTime + 0.25);
     },
-    gull(dist = 0) {
+    gull(dist = 0, pan = 0) {
       if (!ready()) return;
       const at = ctx.currentTime, out = gain(0.07 * far(dist / 3));
       const bp = filter("bandpass", 1500, 3);
-      bp.connect(out).connect(master);
+      bp.connect(out).connect(side(pan * 0.8));
       for (let i = 0; i < 2 + Math.floor(Math.random() * 2); i++) {
         const t = at + i * 0.28;
         const o = tone(1350, 1, 0.22, "sawtooth", t, 0.02, bp);
@@ -228,12 +271,12 @@ export function createSound() {
       s.start(at); lfo.start(at);
       s.stop(at + 4.6); lfo.stop(at + 4.6);
     },
-    meow(dist = 0) {
+    meow(dist = 0, pan = 0) {
       if (!ready()) return;
       const at = ctx.currentTime, k = far(dist);
       const bp = filter("bandpass", 1100, 4);
       const out = gain(0.16 * k);
-      bp.connect(out).connect(master);
+      bp.connect(out).connect(side(pan * 0.7));
       const o = tone(520, 1, 0.55, "sawtooth", at, 0.06, bp);
       o.frequency.linearRampToValueAtTime(760, at + 0.18);
       o.frequency.linearRampToValueAtTime(430, at + 0.55);
@@ -285,12 +328,59 @@ export function createSound() {
       }
       set(beds.burner, on ? 0.34 : 0, on ? 0.05 : 0.15);
     },
-    // Dolphins: quick clicks and a whistle
-    dolphin(dist = 0) {
+    // An owl in the trees, two soft notes and a third
+    owl(dist = 0, pan = 0) {
       if (!ready()) return;
-      const at = ctx.currentTime, k = far(dist / 2);
-      for (let i = 0; i < 5; i++) burst("bandpass", 4000, 6, 0.04 * k, 0.012, at + i * 0.035);
-      const o = tone(5200, 0.025 * k, 0.5, "sine", at + 0.25, 0.05);
+      const at = ctx.currentTime, k = 0.07 * far(dist / 3), out = side(pan * 0.8);
+      for (const [d, f, len] of [[0, 410, 0.32], [0.55, 380, 0.22], [0.82, 372, 0.6]]) {
+        const o = tone(f, k, len, "sine", at + d, 0.08, out);
+        o.frequency.linearRampToValueAtTime(f * 0.94, at + d + len);
+      }
+    },
+    // Wings clattering as gulls take off, and one of them complaining
+    flutter(dist = 0, pan = 0, n = 1) {
+      if (!ready()) return;
+      const at = ctx.currentTime, k = far(dist) * Math.min(1.6, 0.7 + 0.3 * n), out = side(pan * 0.8);
+      for (let i = 0; i < 9; i++) burst("bandpass", 900 + Math.random() * 500, 1.4, 0.06 * k * (1 - i / 10), 0.05, at + i * 0.07 + Math.random() * 0.02, 0.004, out);
+      if (Math.random() < 0.6) setTimeout(() => this.gull(dist, pan), 350);
+    },
+    // Little claws on sand
+    scuttle(dist = 0, pan = 0) {
+      if (!ready()) return;
+      const at = ctx.currentTime, out = side(pan * 0.8);
+      for (let i = 0; i < 10; i++) burst("highpass", 4200, 2, 0.03 * far(dist), 0.012, at + i * 0.045 + Math.random() * 0.02, 0.002, out);
+    },
+    // A jump, and coming down again
+    hup() {
+      if (!ready()) return;
+      const f = burst("bandpass", 500, 1.2, 0.05, 0.18);
+      f.frequency.exponentialRampToValueAtTime(1100, ctx.currentTime + 0.15);
+    },
+    land(surface, k = 1) {
+      if (!ready()) return;
+      const v = Math.min(1.5, k);
+      tone(80, 0.12 * v, 0.14, "sine");
+      if (surface === "sand") burst("lowpass", 700, 0.7, 0.16 * v, 0.2);
+      else if (surface === "wood") { tone(110, 0.16 * v, 0.12); burst("bandpass", 700, 1.2, 0.08 * v, 0.08); }
+      else if (surface === "grass") burst("bandpass", 2400, 0.8, 0.07 * v, 0.12);
+      else burst("bandpass", 1300, 1.4, 0.1 * v, 0.08);
+    },
+    // A coin spinning up, and into the fountain
+    coin(dist = 0) {
+      if (!ready()) return;
+      const at = ctx.currentTime, k = far(dist);
+      tone(3150, 0.07 * k, 0.5, "sine", at, 0.002);
+      tone(4720, 0.03 * k, 0.3, "sine", at, 0.002);
+      const o = tone(1500, 0.08 * k, 0.12, "sine", at + 0.55, 0.002);
+      o.frequency.exponentialRampToValueAtTime(700, at + 0.65);
+      burst("lowpass", 2400, 0.7, 0.06 * k, 0.2, at + 0.55);
+    },
+    // Dolphins: quick clicks and a whistle
+    dolphin(dist = 0, pan = 0) {
+      if (!ready()) return;
+      const at = ctx.currentTime, k = far(dist / 2), out = side(pan * 0.8);
+      for (let i = 0; i < 5; i++) burst("bandpass", 4000, 6, 0.04 * k, 0.012, at + i * 0.035, 0.004, out);
+      const o = tone(5200, 0.025 * k, 0.5, "sine", at + 0.25, 0.05, out);
       o.frequency.linearRampToValueAtTime(7600, at + 0.5);
       o.frequency.linearRampToValueAtTime(5800, at + 0.75);
     },

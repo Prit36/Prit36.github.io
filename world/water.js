@@ -62,7 +62,7 @@ export function createWater(floorTex, floorRect) {
     uDeep: { value: palette.waterDeep }, uMid: { value: palette.waterMid },
     uShallow: { value: palette.waterShallow }, uClear: { value: palette.waterClear },
     uFoamCol: { value: new THREE.Color("#f6f3ea") },
-    uLamp: { value: new THREE.Vector3() }, uBeam: { value: 0 }, uBeamOn: { value: 0 },
+    uLamp: { value: new THREE.Vector3() }, uBeam: { value: 0 }, uBeamOn: { value: 0 }, uSunK: { value: 1 },
     uTime: U.uTime, uNight: U.uNight, uSunUp: U.uSunUp,
     uSunDir: U.uSunDir, uFogColor: U.uFogColor, uFogGlow: U.uFogGlow, uFogDensity: U.uFogDensity, uFogFalloff: U.uFogFalloff,
   };
@@ -84,7 +84,7 @@ export function createWater(floorTex, floorRect) {
       uniform sampler2D tFloor, tRefl, tNormal, tFoam;
       uniform vec4 uRect, uFoamRect;
       uniform vec3 uLight, uGlintCol, uDeep, uMid, uShallow, uClear, uFoamCol, uLamp;
-      uniform float uTime, uGlint, uNight, uSunUp, uBeam, uBeamOn, uReflect;
+      uniform float uTime, uGlint, uNight, uSunUp, uBeam, uBeamOn, uReflect, uSunK;
       varying vec3 vW;
       varying vec4 vRefl;
       ${NOISE}
@@ -95,7 +95,11 @@ export function createWater(floorTex, floorRect) {
         float dist = length(cameraPosition - vW);
         vec2 fuv = (xz - uRect.xy) / uRect.zw;
         vec4 fl = vec4(-40., 0., 0., 0.);
-        if (fuv.x > 0. && fuv.y > 0. && fuv.x < 1. && fuv.y < 1.) fl = texture2D(tFloor, fuv);
+        if (fuv.x > 0. && fuv.y > 0. && fuv.x < 1. && fuv.y < 1.) {
+          fl = texture2D(tFloor, fuv);
+          // a hollow inland, below the level of the sea but not part of it
+          if (fl.a < 0.5) discard;
+        }
         float depth = max(-fl.r, 0.);
         float t = uTime;
         // the swell, at three sizes
@@ -113,7 +117,10 @@ export function createWater(floorTex, floorRect) {
         body = mix(body, uMid, smoothstep(3., 8.5, dd));
         body = mix(body, uDeep, smoothstep(10., 28., dd));
         body = mix(body, body * vec3(0.42, 0.6, 0.72), fl.g * smoothstep(18., 2., depth) * 0.7);
-        float clear = (1. - smoothstep(0.25, 6.5, depth)) * fl.a;
+        // with the sun low, less light gets into the water to come back out
+        body *= mix(0.68, 1., uSunK);
+        // less of the floor shows when the light is low and slanting
+        float clear = (1. - smoothstep(0.25, 6.5, depth)) * fl.a * mix(0.5, 1., uSunK);
         float aBody = mix(1., mix(0.4, 0.88, smoothstep(0.1, 5.5, depth)), clear);
         aBody = mix(aBody, 1., smoothstep(120., 380., dist));
         // what it reflects
@@ -127,17 +134,31 @@ export function createWater(floorTex, floorRect) {
           + (texture2D(tRefl, ruv + vec2(spread * 0.3, spread * 2.2)).rgb + texture2D(tRefl, ruv - vec2(spread * 0.3, spread * 2.2)).rgb) * 0.1;
         refl = mix(refl, hazeColor(reflect(-V, vec3(0., 1., 0.))), farR * 0.55);
         float ndv = max(dot(N, V), 0.);
-        float fres = clamp(0.03 + 0.62 * pow(1. - ndv, 4.), 0., 0.72) * uReflect;
+        // and the calm water of evening is more of a mirror
+        float fres = clamp(0.03 + 0.1 * (1. - uSunK) + 0.62 * pow(1. - ndv, 4.), 0., 0.76) * uReflect;
         // sun (or moon) on the water: a hard core and broken sparkles
         vec3 R = reflect(-V, N);
         float sp = max(dot(R, uLight), 0.);
         float sparkle = smoothstep(0.62, 0.8, vnoise(xz * 1.6 / (1. + dist * 0.01) + vec2(t * 1.2, -t * 0.8)));
-        vec3 glint = uGlintCol * (pow(sp, 600.) * 30. + pow(sp, 60.) * sparkle * 4. + pow(sp, 8.) * 0.08) * uGlint;
-        // foam: where it meets the shore, rolling in, and around rocks and posts
+        vec3 glint = uGlintCol * (pow(sp, 600.) * 30. + pow(sp, 60.) * sparkle * 4. + pow(sp, 8.) * 0.05) * uGlint;
+        // looking into a low sun the mirror whites out; keep some colour in it
+        refl = min(refl, vec3(1.6));
+        // foam: a thin line where the sea meets the shore, crests coming in
+        // that break up as they arrive, and the lace they leave spreading out
         float fn = vnoise(xz * 2.2 + vec2(t * 0.3, -t * 0.2));
         float shore = (1. - smoothstep(0., 2.2, depth)) * fl.b;
-        float lines = smoothstep(0.6, 0.92, sin(depth * 6. - t * 1.5 + wob * 6.) * 0.5 + 0.5) * smoothstep(1.8, 0.35, depth);
-        float foam = max(smoothstep(0.3, 0.04, depth + (fn - 0.5) * 0.25), lines * 0.75 * smoothstep(0.35, 0.6, fn)) * shore;
+        float edge = 0., crest = 0., foam = 0.;
+        if (shore > 0.01) {
+          edge = smoothstep(0.17, 0.02, depth + (fn - 0.5) * 0.12);
+          float ph = depth * 5. - t * 1.3 + wob * 5.;
+          crest = smoothstep(0.86, 0.97, sin(ph) * 0.5 + 0.5) * smoothstep(1.5, 0.3, depth) * smoothstep(0.32, 0.62, fn);
+          float lace = 0.;
+          if (dist < 90.) {
+            vec4 lv = voronoi(xz * 1.15 + vec2(t * 0.05, -t * 0.04) + g * 0.5);
+            lace = (1. - smoothstep(0.03, 0.11, lv.y - lv.x)) * smoothstep(0.8, 0.12, depth) * smoothstep(0.3, 0.7, fn) * (1. - smoothstep(40., 90., dist));
+          }
+          foam = max(edge * 0.95, max(crest * 0.62, lace * mix(0.18, 0.5, uSunK))) * shore;
+        }
         vec2 fo = (xz - uFoamRect.xy) / uFoamRect.zw;
         if (fo.x > 0. && fo.y > 0. && fo.x < 1. && fo.y < 1.) {
           float ob = texture2D(tFoam, fo).r;
@@ -145,15 +166,16 @@ export function createWater(floorTex, floorRect) {
           foam = max(foam, smoothstep(0.6, 0.85, ob + (fn - 0.5) * 0.35) * 0.85 + smoothstep(0.2, 0.5, ob) * smoothstep(0.75, 0.95, ring) * 0.4 * fn);
         }
         foam = clamp(foam, 0., 1.) * (1. - smoothstep(60., 220., dist) * 0.7);
-        // by night the breaking water glows blue-green, the way plankton does
-        float glowN = smoothstep(0.35, 0.85, uNight);
-        float flick = smoothstep(0.35, 0.9, vnoise(xz * 2.3 + vec2(t * 0.9, -t * 0.7)) * 0.7 + vnoise(xz * 7.1 - t * 1.3) * 0.3);
-        vec3 foamCol = mix(uFoamCol * mix(1., 0.32, uNight), vec3(0.12, 0.8, 1.05) * (0.08 + 0.75 * flick), glowN * 0.9);
-        foam *= mix(1., 0.35 + 0.65 * flick, glowN);
+        // deep in the night the breaking water glows blue-green, the way
+        // plankton does: only where it breaks, in flecks
+        float glowN = smoothstep(0.78, 0.98, uNight);
+        float flick = smoothstep(0.45, 0.9, vnoise(xz * 2.3 + vec2(t * 0.9, -t * 0.7)) * 0.7 + vnoise(xz * 7.1 - t * 1.3) * 0.3);
+        vec3 foamCol = uFoamCol * mix(1., 0.26, smoothstep(0., 0.85, uNight));
+        vec3 bio = vec3(0.08, 0.62, 0.9) * (edge + crest * 0.6) * shore * flick * glowN * 0.85;
         // put it together, premultiplied so the reflection adds over what's under the water
         vec3 col = body * aBody * (1. - fres) + refl * fres + glint;
         float a = 1. - (1. - aBody) * (1. - fres);
-        col = mix(col, foamCol, foam * 0.92);
+        col = mix(col, foamCol, foam * 0.92) + bio;
         a = max(a, foam * 0.92);
         // the lighthouse beam, where it crosses the water
         if (uBeamOn > 0.) {
@@ -259,7 +281,7 @@ export function createRipples(count = 64) {
   // By night the rings glow blue-green: the plankton lighting up where the
   // water's disturbed.
   const update = (dt, night = 0) => {
-    const glow = Math.max(0, Math.min(1, (night - 0.3) / 0.5));
+    const glow = Math.max(0, Math.min(1, (night - 0.72) / 0.24));
     rings.forEach((r, i) => {
       r.age += dt;
       const k = r.age / r.life;

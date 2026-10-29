@@ -105,6 +105,10 @@ export const pathDist = (x, z) => {
   return best;
 };
 
+// The middle of the village square
+export const PLAZA = [206, -8];
+let PLAZA_Y = null;
+
 // Everything known about one spot. Reused, so a call allocates nothing.
 const F = { h: 0, d: 0, beach: 0, rock: 0, village: 0, path: 0, north: 0, island: 0, terrace: 0 };
 export const TERRACE_STEP = 3.2;
@@ -151,6 +155,12 @@ export function field(x, z, out = F) {
       const step = 2.6, q = h / step, f = q - Math.floor(q);
       const terraced = (Math.floor(q) + smooth(0.55, 1, f)) * step;
       h = lerp(h, terraced, village * 0.75 * smooth(6, 16, d) * (1 - path));
+    }
+    // and the plaza is levelled, so the paving lies on the ground
+    const pd = Math.hypot(x - PLAZA[0], z - PLAZA[1]);
+    if (pd < 10.4) {
+      if (PLAZA_Y === null) { PLAZA_Y = NaN; PLAZA_Y = field(PLAZA[0], PLAZA[1], {}).h; }
+      if (!Number.isNaN(PLAZA_Y)) h = lerp(PLAZA_Y, h, smooth(9.2, 10.4, pd));
     }
   } else {
     const dd = -d;
@@ -206,6 +216,12 @@ export function heightAt(x, z) {
   }
   return field(x, z).h;
 }
+// Is this the sea (or the shore of it), rather than a hollow inland?
+export const seaAt = (x, z) => {
+  const i = Math.round((x + CORE) / STEP), j = Math.round((z + CORE) / STEP);
+  if (!INLAND || i < 0 || j < 0 || i > CELLS || j > CELLS) return heightAt(x, z) < 0;
+  return !INLAND[j * W + i] && heightAt(x, z) < 0;
+};
 // Slope as 1 − the up component of the normal.
 export const slopeAt = (x, z) => {
   const e = 1.5;
@@ -216,6 +232,7 @@ export const slopeAt = (x, z) => {
 // What grows where, and how the ground looks there, worked out once per
 // point of the grid and handed to the shaders.
 let GD = null;   // ground data: height, grass, grass height, green-ness
+let INLAND = null; // 1 where the ground is land, even if it dips below the sea's level
 let GROUND_TEX = null;
 let CD = null;   // cover data: wood, scrub, meadow
 // Nothing grows under a house or a wall.
@@ -254,6 +271,8 @@ export function buildTerrain() {
   HG = new Float32Array(W * W);
   GD = new Float32Array(W * W * 4);
   CD = new Float32Array(W * W * 4);
+  const SD = new Float32Array(W * W * 4);
+  INLAND = new Uint8Array(W * W);
   const floor = new Uint16Array(W * W * 4);
   const half = THREE.DataUtils.toHalfFloat;
   for (let j = 0; j < n; j++) {
@@ -272,7 +291,9 @@ export function buildTerrain() {
         floor[c * 4] = half(f.h);
         floor[c * 4 + 1] = half(f.rock);
         floor[c * 4 + 2] = half(1 - smooth(3, 12, -f.d));
-        floor[c * 4 + 3] = half(1);
+        // the sea is the sea; a hollow inland that dips below its level is not
+        floor[c * 4 + 3] = half(f.d > 1.5 ? 0 : 1);
+        INLAND[c] = f.d > 1.5 ? 1 : 0;
       }
     }
   }
@@ -314,6 +335,7 @@ export function buildTerrain() {
         GD[c + 1] = g;
         GD[c + 2] = (0.55 + 0.75 * fbm(x / 22 - 5, z / 22 + 2, 3) + 0.25 * north) * (1 + 0.35 * meadow - 0.3 * wood);
         GD[c + 3] = Math.min(1, 0.3 + smooth(0.3, 0.75, fbm(x / 60 + 11, z / 60, 3)) * 0.6 + north * 0.4 + village * 0.25 + meadow * 0.5 + wood * 0.4);
+        SD[c] = beach; SD[c + 1] = path; SD[c + 2] = slope; SD[c + 3] = village;
       }
     }
   }
@@ -363,6 +385,10 @@ export function buildTerrain() {
   coverTex.magFilter = coverTex.minFilter = THREE.NearestFilter;
   coverTex.needsUpdate = true;
   U.tCover.value = coverTex;
+  const surfaceTex = new THREE.DataTexture(SD, W, W, THREE.RGBAFormat, THREE.FloatType);
+  surfaceTex.magFilter = surfaceTex.minFilter = THREE.NearestFilter;
+  surfaceTex.needsUpdate = true;
+  U.tSurface.value = surfaceTex;
   return { mesh, coarse, floorTex, floorRect: new THREE.Vector4(-CORE, -CORE, CORE * 2, CORE * 2) };
 }
 
@@ -401,7 +427,15 @@ function terrainMaterial() {
     uniforms: TERRAIN,
     vertexPars: "attribute vec4 aTerr, aMisc;\nattribute vec3 aCover;\nvarying vec4 vTerr, vMisc;\nvarying vec3 vCover;",
     vertex: "vTerr = aTerr; vMisc = aMisc; vCover = aCover;",
+    // wet sand shines with the sky
+    emissive: /* glsl */ `
+      if (gWet > 0.01) {
+        vec3 V = normalize(cameraPosition - vWorldP);
+        float fr = 0.06 + 0.6 * pow(1. - max(V.y, 0.), 5.);
+        totalEmissiveRadiance += hazeColor(reflect(-V, vec3(0., 1., 0.))) * gWet * fr * (0.35 + 0.65 * uSunUp);
+      }`,
     fragmentPars: /* glsl */ `
+      float gWet = 0.;
       varying vec4 vTerr, vMisc;
       varying vec3 vCover;
       uniform vec3 cDry, cSage, cGreen, cForest, cSoil, cWood, cScrub, cMeadow, cRockA, cRockB, cRockC, cSand, cWetSand, cPath, cCobble, cMortar, cBed, cBedRock, cFar, cPeak;
@@ -475,22 +509,80 @@ function terrainMaterial() {
       }
       // sand on the beach, darker where the sea has just been
       float swash = sin(uTime * 0.7 + P.x * 0.05 + P.z * 0.03) * 0.1;
+      float beach = vTerr.x * (1. - smoothstep(2.4, 3.8, h));
       vec3 sand = mix(cWetSand, cSand, smoothstep(0.08, 0.75, h - swash));
       sand *= 0.95 + 0.07 * vnoise(P.xz * vec2(0.8, 3.4)) * detail;
-      col = mix(col, sand, vTerr.x * (1. - smoothstep(2.4, 3.8, h)));
-      // rock where it's steep, and all along the rocky shore
+      gWet = 0.;
+      if (beach > 0.01 && detail > 0.) {
+        // the dry sand combed into ripples by the wind
+        vec2 rq = P.xz + vec2(vnoise(P.xz * 0.11), vnoise(P.xz * 0.11 + 7.)) * 6.;
+        float rip = sin(dot(rq, vec2(1.9, 0.8)) + vnoise(P.xz * 0.6) * 2.);
+        float dry = smoothstep(0.9, 1.6, h);
+        sand *= 1. + rip * 0.035 * dry * detail;
+        gBump += rip * 0.012 * dry * detail;
+        // a line of dried weed and broken shell where the high water left it
+        float wrack = exp(-pow((h - 0.82 - 0.12 * vnoise(P.xz * 0.07)) / 0.13, 2.)) * smoothstep(0.35, 0.6, vnoise(P.xz * 0.21 + 4.));
+        vec4 sv = voronoi(P.xz * 7.);
+        float bit = smoothstep(0.24, 0.1, sv.x) * step(0.55, hash12(sv.zw));
+        float kind = hash12(sv.zw + 3.1);
+        vec3 bitCol = kind < 0.55 ? vec3(0.24, 0.22, 0.14) : kind < 0.8 ? vec3(0.95, 0.9, 0.84) : vec3(0.92, 0.72, 0.66);
+        sand = mix(sand, bitCol, bit * max(wrack, 0.05 * smoothstep(1.2, 0.3, h)) * detail);
+        // pebbles, thicker where the beach runs into the rocks
+        vec4 pv = voronoi(P.xz * 5.5 + 11.);
+        float pick = step(1. - (0.05 + 0.5 * (1. - vTerr.x)), hash12(pv.zw));
+        float peb = smoothstep(0.26, 0.17, pv.x) * pick;
+        float sunk = smoothstep(0.2, 0.27, pv.x) * smoothstep(0.34, 0.27, pv.x) * pick;
+        sand = mix(sand, mix(cRockB, cRockC, hash12(pv.zw + 1.7)) * (0.85 + 0.25 * hash12(pv.zw + 5.)), peb * 0.85 * detail);
+        sand *= 1. - sunk * 0.18 * detail;
+        // the sea running up the sand and draining back: a sheet of water
+        // with a lip of foam as it comes, a wet shine as it goes
+        if (h < 0.75) {
+          float ph = uTime * 0.17 + dot(P.xz, vec2(0.009, 0.006)) + vnoise(P.xz * 0.04) * 0.7;
+          float s = fract(ph), wave = floor(ph);
+          float reach = s < 0.28 ? smoothstep(0., 0.28, s) : 1. - smoothstep(0.28, 1., s);
+          float top = (0.1 + 0.36 * reach) * (0.75 + 0.5 * vnoise(P.xz * vec2(0.5, 0.2) + wave * 7.3)) * (0.65 + 0.35 * hash11(wave));
+          float sheet = smoothstep(top, top - 0.05, h) * step(-0.05, h);
+          float lip = smoothstep(0.045, 0., abs(h - top + 0.02)) * smoothstep(0.75, 0.15, s) * (0.6 + 0.4 * vnoise(P.xz * 3. + uTime));
+          sand = mix(sand, sand * vec3(0.62, 0.78, 0.8), sheet * 0.55);
+          sand = mix(sand, vec3(0.97, 0.96, 0.92), lip * 0.85);
+          gWet = max(sheet, smoothstep(0.5, 0.05, h - swash) * 0.45) * (1. - lip);
+        }
+      }
+      col = mix(col, sand, beach);
+      gWet *= beach;
+      // rock where it's steep, and all along the rocky shore; the edge broken
+      // up, so grass runs into the cracks
       float shore = (1. - vTerr.x) * (1. - smoothstep(4., 10., vMisc.y)) * (1. - smoothstep(14., 24., h)) * (1. - vMisc.w * 0.5);
-      float rocky = max(smoothstep(0.34, 0.5, slope + (n2 - 0.5) * 0.14), shore * smoothstep(0.25, 0.55, n2 * 0.6 + n3 * 0.6));
+      float edgeN = (n4 - 0.5) * 0.12 * detail;
+      float rocky = max(smoothstep(0.34, 0.5, slope + (n2 - 0.5) * 0.14 + edgeN), shore * smoothstep(0.25, 0.55, n2 * 0.6 + n3 * 0.6 + edgeN));
       rocky *= 1. - far;
       if (rocky > 0.01) {
         float rb;
         vec3 rock = limestone(P, detail, cRockA, cRockB, cRockC, rb);
+        // a darker rim where the turf lips over the stone
+        rock *= mix(1., 0.78, smoothstep(0.75, 0.2, rocky) * (1. - vTerr.x) * detail);
         col = mix(col, rock, rocky);
         gBump += rb * rocky * 0.25;
       }
       // paths: packed earth outside the village, cobbles in it
       if (vTerr.y > 0.01) {
         vec3 path = cPath * (0.9 + 0.16 * n4);
+        if (detail > 0.) {
+          // worn pale down the middle, grass creeping in at the edges, and
+          // stones turned up by feet
+          float mid = smoothstep(0.55, 0.95, vTerr.y);
+          path *= mix(0.86, 1.06, mid) * (0.94 + 0.12 * vnoise(P.xz * vec2(0.4, 2.3)));
+          vec4 pv = voronoi(P.xz * 5. + 3.);
+          float pick = step(0.66, hash12(pv.zw));
+          float stone = smoothstep(0.25, 0.16, pv.x) * pick;
+          float sunk = smoothstep(0.19, 0.25, pv.x) * smoothstep(0.33, 0.25, pv.x) * pick;
+          path = mix(path, mix(cRockB, cRockC, hash12(pv.zw + 2.)) * 0.95, stone * 0.75 * detail);
+          path *= 1. - sunk * 0.1 * detail;
+          // packed earth is never one colour: ochre where it's damp, pale where it's dry
+          path = mix(path, path * vec3(0.86, 0.8, 0.68), smoothstep(0.45, 0.8, vnoise(P.xz * 0.25 + 9.)) * 0.6);
+          float tuft = smoothstep(0.65, 0.3, vTerr.y + (vnoise(P.xz * 1.7) - 0.5) * 0.35);
+          path = mix(path, cGreen * (0.75 + 0.3 * n4), tuft * 0.75 * detail * (1. - vTerr.x));
+        }
         if (vMisc.x > 0.2 && detail > 0. && vTerr.x < 0.3 && h > 2.5) {
           vec4 v = voronoi(P.xz * 2.4);
           float edge = smoothstep(0.02, 0.1, v.y - v.x);
@@ -502,16 +594,19 @@ function terrainMaterial() {
         col = mix(col, path, vTerr.y * (1. - rocky * 0.5));
       }
       // the sea floor
-      if (h < 0.4) {
+      float sea = 1. - smoothstep(1., 3., vMisc.y);
+      if (h < 0.4 && sea > 0.) {
         vec3 bed = mix(cBed, cBed * vec3(0.78, 0.86, 0.85), smoothstep(-0.5, -8., h));
         bed *= 0.92 + 0.12 * n4;
         bed = mix(bed, cBedRock * (0.75 + 0.5 * n3), max(vTerr.z, rocky * 0.55));
         float ca = detail > 0. ? caustic(P.xz * 0.8) : 0.;
-        bed *= 1. + ca * uSunUp * smoothstep(-9., -0.4, h) * 0.85;
-        col = mix(col, bed, smoothstep(0.35, -0.35, h));
+        bed *= 1. + ca * uSunUp * smoothstep(-9., -0.4, h) * 0.75;
+        col = mix(col, bed, smoothstep(0.35, -0.35, h) * sea);
+        // seen through the water: the reds go first, then the greens
+        col *= mix(vec3(1.), mix(vec3(0.6, 0.88, 0.9), vec3(0.32, 0.6, 0.78), smoothstep(-1.5, -6., h)), smoothstep(0.02, -1.4, h) * sea);
       }
       // wet just above the water line
-      col *= 1. - 0.22 * smoothstep(0.65, 0.05, h - swash) * step(-0.05, h);
+      col *= 1. - 0.22 * smoothstep(0.65, 0.05, h - swash) * step(-0.05, h) * sea;
       diffuseColor.rgb = col;`,
   });
 }

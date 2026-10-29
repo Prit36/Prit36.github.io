@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { rng, noise, smooth, field, heightAt, slopeAt, addSolid, pathDist, clearGround, coverAt, ISLANDS, PATHS, TERRAIN, LIMESTONE, TERRACE_STEP } from "./land.js";
+import { rng, noise, smooth, field, heightAt, slopeAt, addSolid, pathDist, clearGround, coverAt, ISLANDS, PATHS, PLAZA, TERRAIN, LIMESTONE, TERRACE_STEP } from "./land.js";
 import { stylize, U, NOISE, FOG } from "./style.js";
 
 // Everything built on the bay: the village with its windows and shutters,
@@ -203,7 +203,9 @@ export function buildWorld(scene) {
   const plants = [];              // trees and bushes for the flora
   const foam = [];                // [x, z, radius] things standing in the sea
   const bulbs = [];               // [x, y, z]: strings of lights
+  const chimneys = [];            // [x, y, z]: where the smoke comes out
   const places = {};
+  const lampSpots = [];           // [x, y, z]: street lamps, for the moths
   // Footprints, [x, z, radius], keep trees and rocks off what's built and
   // off each other. Kept in a grid, since there are thousands.
   const FP = new Map(), FC = 8;
@@ -407,6 +409,7 @@ export function buildWorld(scene) {
         kit.put(BOX, wall, M(cx, ch - 0.6, cz, rot, 0.6, 1.8, 0.6), PLASTER);
         kit.put(BOX, trim, M(cx, ch + 0.33, cz, rot, 0.78, 0.1, 0.78), STONE);
         kit.put(hipRoof(0.7, 0.7, 0.22), roof, M(cx, ch + 0.5, cz, rot), TILE);
+        chimneys.push([cx, ch + 0.55, cz]);
         for (const k of [-1, 1]) {
           const [px, pz] = [cx + Math.cos(rot) * k * 0.2, cz - Math.sin(rot) * k * 0.2];
           kit.put(BOX, "#b5653c", M(px, ch + 0.42, pz, rot, 0.12, 0.14, 0.5), PLAIN);
@@ -590,6 +593,7 @@ export function buildWorld(scene) {
       windows.push([ax + Math.sin(a) * 0.12, y + 3.17, az + Math.cos(a) * 0.12, a, 0.22, 0.24, 1, 3]);
     }
     glows.push([ax, y + 3.15, az, 6, 1, 0.72, 0.38, 2]);
+    lampSpots.push([ax, y + 3.15, az]);
     addSolid({ x, z, r: 0.16, top: y + 3.4, surf: "metal" });
   };
   for (const [x, y, z, rot] of lamps) streetLamp(x, y, z, rot);
@@ -634,9 +638,10 @@ export function buildWorld(scene) {
 
   // ---------------------------------------------------------------- the plaza
   {
-    const [x, z] = [206, -8], y = heightAt(x, z);
+    const [x, z] = PLAZA, y = heightAt(x, z);
     kit.put(CYL, "#d6c6a6", M(x, y - 1.6, z, 0, 9.05, 3.2, 9.05), STONE);
     kit.put(CYL, "#e4d8c0", M(x, y + 0.02, z, 0, 9, 0.08, 9), PAVING);
+    addSolid({ x, z, r: 9, top: y + 0.06, surf: "stone" });
     // the fountain: an eight-sided basin, a column, a bowl
     kit.put(CYL8, "#ddd0b6", M(x, y + 0.35, z, Math.PI / 8, 2.5, 0.7, 2.5), STONE);
     kit.put(CYL8, "#e9e0cc", M(x, y + 0.74, z, Math.PI / 8, 2.62, 0.1, 2.62), STONE);
@@ -918,6 +923,7 @@ export function buildWorld(scene) {
       const [qx, qz] = along(4);
       kit.put(BOX, "#d9cbb0", M(qx, deck - 1.4, qz, rot, 4.4, 3, 8), STONE);
       kit.put(BOX, "#e6dbc4", M(qx, deck + 0.01, qz, rot, 4.5, 0.12, 8.1), PAVING);
+      addSolid({ x: qx, z: qz, hw: 2.25, hd: 4.05, rot, top: deck + 0.07, surf: "stone" });
       foam.push([qx, qz, 2.6]);
     }
     for (let k = 0; k < (len - 8) / 0.32; k++) {
@@ -1195,6 +1201,7 @@ export function buildWorld(scene) {
     kit.put(BOX, "#8a6646", M(bx - s * 0.25, y + 0.75, bz - c * 0.25, rot, 2.2, 0.4, 0.06, -0.15), WOOD);
     for (const k of [-0.9, 0.9]) kit.put(BOX, "#3a3836", M(bx + c * k, y + 0.22, bz - s * k, rot, 0.08, 0.45, 0.45), METAL);
     addSolid({ x: bx, z: bz, hw: 1.1, hd: 0.3, rot, top: y + 0.5, surf: "wood" });
+    places.bench = { x: bx, y: y + 0.5, z: bz, yaw: rot + Math.PI };
     places.view = [x + c * 2.2, y, z - s * 2.2];
     // the telescope, pointed across the bay
     const tx = x + c * 3.8 + s * 1.2, tz = z - s * 3.8 + c * 1.2, ty = heightAt(tx, tz);
@@ -1334,6 +1341,7 @@ export function buildWorld(scene) {
     addSolid({ x, z, hw: 2.5, hd: 3.5, rot, top: y + 4.55, surf: "roof" });
     claim(x, z, 8);
     places.chapel = [x, y, z];
+    places.chapelBell = [gx, y + 5.35, gz];
   }
 
   // A clear, flat patch of meadow above the beach, for the balloon
@@ -1580,7 +1588,7 @@ export function buildWorld(scene) {
   clothMesh.layers.enable(1);
   scene.add(clothMesh);
 
-  return { places, windows, glows, bulbs, boats, plants, foam, windmill, materials: { built: mat, boat: boatMat }, gozzo };
+  return { places, windows, glows, bulbs, boats, plants, foam, windmill, chimneys, lamps: lampSpots, materials: { built: mat, boat: boatMat }, gozzo };
 }
 
 // Cloth stirs in the wind: washing, awnings, parasols and sails.

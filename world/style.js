@@ -20,6 +20,7 @@ export const U = {
   uPlayer: { value: new THREE.Vector3() },
   tGround: { value: null },
   tCover: { value: null },
+  tSurface: { value: null },
   uGround: { value: new THREE.Vector4(0, 0, 1, 2) },
 };
 
@@ -78,7 +79,7 @@ export const FOG = /* glsl */ `
 // The height of the ground anywhere near the bay, so that things standing
 // on it can be darker where they meet it.
 export const GROUND = /* glsl */ `
-  uniform sampler2D tGround, tCover;
+  uniform sampler2D tGround, tCover, tSurface;
   uniform vec4 uGround;
   float groundH(vec2 xz) {
     vec2 g = (xz - uGround.xy) / uGround.z;
@@ -96,6 +97,16 @@ export const GROUND = /* glsl */ `
     vec2 f = clamp(g - vec2(i), 0., 1.);
     vec4 a = texelFetch(tGround, i, 0), b = texelFetch(tGround, i + ivec2(1, 0), 0);
     vec4 c = texelFetch(tGround, i + ivec2(0, 1), 0), d = texelFetch(tGround, i + ivec2(1, 1), 0);
+    return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
+  }
+  // beach, path, slope, village
+  vec4 surfaceData(vec2 xz) {
+    vec2 g = (xz - uGround.xy) / uGround.z;
+    int n = int(uGround.w);
+    ivec2 i = clamp(ivec2(floor(g)), ivec2(0), ivec2(n - 2));
+    vec2 f = clamp(g - vec2(i), 0., 1.);
+    vec4 a = texelFetch(tSurface, i, 0), b = texelFetch(tSurface, i + ivec2(1, 0), 0);
+    vec4 c = texelFetch(tSurface, i + ivec2(0, 1), 0), d = texelFetch(tSurface, i + ivec2(1, 1), 0);
     return mix(mix(a, b, f.x), mix(c, d, f.x), f.y);
   }
   // wood, scrub, meadow

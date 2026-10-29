@@ -26,8 +26,9 @@ export const PHASES = ["new moon", "waxing crescent", "first quarter", "waxing g
   "full moon", "waning gibbous", "last quarter", "waning crescent"];
 export const smoothstep = smooth;
 
-// Three palettes, mixed by how far the sun is below the horizon (night)
-// and how close it is to it (gold). Colours are picked from the painting.
+// Palettes picked from the painting, mixed by where the sun is: day; the
+// rosy, cooler gold of sunrise and the deeper gold of sunset; the blue hour
+// just after (the sky saturated, the land gone quiet); and night.
 const C = (h) => new THREE.Color(h);
 const DAY = {
   zenith: C("#2a68c4"), horizon: C("#b9d6ea"), fog: C("#bcd3e3"), glow: C("#fff0d0"), wisp: C("#f7f3ea"),
@@ -43,47 +44,67 @@ const GOLD = {
   waterDeep: C("#2c3d82"), waterMid: C("#4864a4"), waterShallow: C("#4c9aab"), waterClear: C("#82c4b6"),
   range: C("#8a76a8"), rangeFar: C("#cb9da0"),
 };
+const DAWN = {
+  zenith: C("#5a72b6"), horizon: C("#f2bba6"), fog: C("#dcbfbc"), glow: C("#ffcaa0"), wisp: C("#ffd6c8"),
+  cloudLit: C("#ffe2cc"), cloudMid: C("#efbcb6"), cloudShade: C("#9a95c4"), cloudUnder: C("#7d7aac"),
+  hemiSky: C("#aab0dc"), hemiGround: C("#b89c8c"), light: C("#ffc8a2"),
+  waterDeep: C("#2a4486"), waterMid: C("#46689f"), waterShallow: C("#5592a6"), waterClear: C("#86bdb4"),
+  range: C("#8c88b6"), rangeFar: C("#d4abb6"),
+};
+const BLUE = {
+  zenith: C("#18245e"), horizon: C("#6a64a4"), fog: C("#4c548c"), glow: C("#c27c86"), wisp: C("#7470ae"),
+  cloudLit: C("#8a82b4"), cloudMid: C("#5c5c94"), cloudShade: C("#363c70"), cloudUnder: C("#2a305e"),
+  hemiSky: C("#5a68b0"), hemiGround: C("#2e2e4c"), light: C("#a4acec"),
+  waterDeep: C("#0c1846"), waterMid: C("#172c66"), waterShallow: C("#1f4672"), waterClear: C("#2c5c72"),
+  range: C("#262c62"), rangeFar: C("#3c3c74"),
+};
 const NIGHT = {
   zenith: C("#060d2b"), horizon: C("#1d2c5c"), fog: C("#1b2852"), glow: C("#3d4f8c"), wisp: C("#2c3a70"),
-  cloudLit: C("#66769f"), cloudMid: C("#38457c"), cloudShade: C("#232c5c"), cloudUnder: C("#192046"),
+  cloudLit: C("#56658f"), cloudMid: C("#2e3a6c"), cloudShade: C("#1c244e"), cloudUnder: C("#151b3c"),
   hemiSky: C("#4b5ea6"), hemiGround: C("#1e2444"), light: C("#a8bcff"),
-  waterDeep: C("#071234"), waterMid: C("#0d2252"), waterShallow: C("#123e5c"), waterClear: C("#1d5864"),
+  waterDeep: C("#061030"), waterMid: C("#0b1d48"), waterShallow: C("#0f3250"), waterClear: C("#174a58"),
   range: C("#141d44"), rangeFar: C("#1c2652"),
 };
 export const palette = {};
 for (const k of Object.keys(DAY)) palette[k] = new THREE.Color();
 
-// Everything the hour decides, worked out once per frame.
+// Everything the hour decides, worked out once per frame. The same object
+// comes back each time.
+const LIGHT = { sunDir: new THREE.Vector3(), moonDir: new THREE.Vector3(), lightDir: new THREE.Vector3() };
 export function lightOf(t) {
   const sun = sunAt(t);
   const { alt } = sun;
   const night = smooth(4, -9, alt);
   const gold = Math.exp(-(((alt - 2.5) / 7) ** 2));
+  const blue = Math.exp(-(((alt + 5.5) / 2.8) ** 2));
+  // morning or evening: is the sun on its way up?
+  const rising = sunAt(t + 6e5).alt > alt;
+  const warm = rising ? DAWN : GOLD;
   const phase = phaseAt(t);
   for (const k of Object.keys(DAY)) {
-    palette[k].copy(DAY[k]).lerp(NIGHT[k], night).lerp(GOLD[k], gold * (1 - 0.45 * night));
+    palette[k].copy(DAY[k]).lerp(NIGHT[k], night).lerp(BLUE[k], blue * 0.9).lerp(warm[k], gold * (1 - 0.45 * night));
   }
   const sunUp = smooth(-2.5, 3, alt);
   const moonUp = smooth(1, -5, alt);
   const lit = (1 - Math.cos(2 * Math.PI * phase)) / 2;
-  const moonDir = sun.dir.clone().negate();
+  const moonDir = LIGHT.moonDir.copy(sun.dir).negate();
   moonDir.y = Math.max(moonDir.y, 0.25);
   moonDir.normalize();
   // The light that casts shadows: the sun by day, the moon by night.
-  const lightDir = alt > -1.5 ? sun.dir.clone() : moonDir.clone();
+  const lightDir = LIGHT.lightDir.copy(alt > -1.5 ? sun.dir : moonDir);
   if (lightDir.y < 0.07) lightDir.y = 0.07;
   lightDir.normalize();
   const strength = alt > -1.5
     ? sunUp * (0.8 + 0.6 * smooth(2, 32, alt))
     : moonUp * (0.16 + 0.26 * lit);
-  return { t, alt, night, gold, phase, lit, sunDir: sun.dir, moonDir, lightDir, strength, sunUp, moonUp };
+  return Object.assign(LIGHT, { t, alt, night, gold, blue, rising, phase, lit, strength, sunUp, moonUp, sunDir: LIGHT.sunDir.copy(sun.dir) });
 }
 
 export function createSky() {
   const uniforms = {
     uZenith: { value: palette.zenith }, uHorizon: { value: palette.horizon },
     uGlow: { value: palette.glow }, uWisp: { value: palette.wisp },
-    uMoon: { value: new THREE.Vector3(0, -1, 0) }, uPhase: { value: 0.5 }, uMoonUp: { value: 0 },
+    uMoon: { value: new THREE.Vector3(0, -1, 0) }, uPhase: { value: 0.5 }, uMoonUp: { value: 0 }, uMist: { value: 0 },
     uSunUp: U.uSunUp, uNight: U.uNight, uTime: U.uTime,
     uSunDir: U.uSunDir, uFogColor: U.uFogColor, uFogGlow: U.uFogGlow, uFogDensity: U.uFogDensity, uFogFalloff: U.uFogFalloff,
   };
@@ -100,7 +121,7 @@ export function createSky() {
       }`,
     fragmentShader: /* glsl */ `
       uniform vec3 uZenith, uHorizon, uGlow, uWisp, uMoon;
-      uniform float uNight, uTime, uPhase, uSunUp, uMoonUp;
+      uniform float uNight, uTime, uPhase, uSunUp, uMoonUp, uMist;
       varying vec3 vDir;
       ${NOISE}
       ${FOG}
@@ -119,7 +140,9 @@ export function createSky() {
         float w = fbm2(wp + vec2(fbm2(wp * 0.5) * 2.));
         float wisp = smoothstep(0.58, 0.82, w) * smoothstep(0.04, 0.12, h) * (1. - smoothstep(0.24, 0.45, h));
         col = mix(col, uWisp * (1. + pow(sd, 6.) * uSunUp), wisp * 0.55);
-        if (uNight > 0.01) {
+        if (uNight > 0.3) {
+          // the brightest stars come out first
+          float dark = smoothstep(0.3, 1., uNight);
           vec3 p = d * 110.;
           vec3 cell = floor(p), f = fract(p) - 0.5;
           float r = hash13(cell);
@@ -128,10 +151,11 @@ export function createSky() {
             float size = 0.09 + 0.14 * smoothstep(0.985, 1., r);
             float tw = 0.6 + 0.4 * sin(uTime * (1. + r * 30.) + r * 300.);
             vec3 sc = mix(vec3(1., 0.85, 0.7), vec3(0.8, 0.9, 1.), hash13(cell + 7.));
-            col += sc * smoothstep(size, 0., length(f - off * 0.6)) * tw * uNight * smoothstep(0., 0.15, h) * (2. + 6. * smoothstep(0.99, 1., r));
+            float show = smoothstep(0.995 - dark * 0.065, 1. - dark * 0.065, r);
+            col += sc * smoothstep(size, 0., length(f - off * 0.6)) * tw * show * dark * smoothstep(0., 0.15, h) * (2. + 6. * smoothstep(0.99, 1., r));
           }
           float band = exp(-pow(dot(d, normalize(vec3(0.35, 0.5, 0.79))) / 0.2, 2.));
-          col += vec3(0.16, 0.18, 0.32) * band * fbm2(d.xy * 7. + d.z * 3.) * uNight * smoothstep(0., 0.3, h);
+          col += vec3(0.13, 0.15, 0.28) * band * fbm2(d.xy * 7. + d.z * 3.) * smoothstep(0.75, 1., uNight) * smoothstep(0., 0.3, h);
           // Now and then, a shooting star
           float per = floor(uTime / 9.), ph = fract(uTime / 9.) * 9.;
           if (ph < 0.8 && hash12(vec2(per, 3.)) > 0.3) {
@@ -160,6 +184,9 @@ export function createSky() {
           }
         }
         col += vec3(1., 0.94, 0.82) * smoothstep(0.99962, 0.9998, sd) * 36. * uSunUp;
+        // a band of mist lying on the sea, thickest in the early morning
+        float mist = exp(-pow((h - 0.012) / 0.035, 2.)) * uMist * (0.75 + 0.25 * fbm2(vec2(atan(d.z, d.x) * 9., uTime * 0.01)));
+        col = mix(col, hazeColor(d) * 1.04, clamp(mist, 0., 0.85));
         // The same haze as the ground, for a point infinitely far away
         float dens = uFogDensity * exp(-uFogFalloff * max(cameraPosition.y, 0.));
         float fogT = h > 0.0005 ? 1. - exp(-dens / (uFogFalloff * h)) : 1.;
@@ -211,54 +238,78 @@ export function createClouds() {
       mine.push({ x: p.x + Math.cos(a) * p.rad * 0.5, y, z: p.z + Math.sin(a) * p.rad * 0.5, rad, u: p.u });
     }
     const lo = alt, hi = Math.max(...mine.map((m) => m.y + m.rad));
-    for (const m of mine) puffs.push({ ...m, shade: (m.y - lo) / (hi - lo) });
+    // the middle of the whole heap, so its puffs can be shaded as one cloud
+    const mid = [cx, (lo + hi) / 2, cz, Math.max(size, (hi - lo) * 0.8)];
+    for (const m of mine) puffs.push({ ...m, shade: (m.y - lo) / (hi - lo), bank: mid, base: lo + size * 0.04 });
   }
   const uniforms = {
     uLight: { value: new THREE.Vector3(0, 1, 0) },
     uLit: { value: palette.cloudLit }, uMid: { value: palette.cloudMid }, uShade: { value: palette.cloudShade },
-    uUnder: { value: palette.cloudUnder }, uBright: { value: 1.3 },
+    uUnder: { value: palette.cloudUnder }, uGlow: { value: palette.glow }, uZenith: { value: palette.zenith }, uHorizon: { value: palette.horizon },
+    uBright: { value: 1.3 }, uAfter: { value: 0 },
     uSunUp: U.uSunUp, uTime: U.uTime,
     uSunDir: U.uSunDir, uFogColor: U.uFogColor, uFogGlow: U.uFogGlow, uFogDensity: U.uFogDensity, uFogFalloff: U.uFogFalloff,
   };
   const geo = new THREE.IcosahedronGeometry(1, 3);
   geo.setAttribute("aShade", new THREE.InstancedBufferAttribute(Float32Array.from(puffs.map((p) => p.shade)), 1));
   geo.setAttribute("aSeed", new THREE.InstancedBufferAttribute(Float32Array.from(puffs.map(() => r() * 100)), 1));
+  geo.setAttribute("aBank", new THREE.InstancedBufferAttribute(Float32Array.from(puffs.flatMap((p) => p.bank)), 4));
+  geo.setAttribute("aBase", new THREE.InstancedBufferAttribute(Float32Array.from(puffs.map((p) => p.base)), 1));
   const mat = new THREE.ShaderMaterial({
     uniforms,
     vertexShader: /* glsl */ `
-      attribute float aShade, aSeed;
+      attribute float aShade, aSeed, aBase;
+      attribute vec4 aBank;
       varying vec3 vN, vW;
-      varying float vShade;
+      varying float vShade, vFlat;
       ${NOISE}
       void main() {
         vec3 p = position * (1. + (vnoise3(position * 2.2 + aSeed) - 0.5) * 0.3);
         mat4 m = modelMatrix * instanceMatrix;
         vec4 w = m * vec4(p, 1.);
+        // cumulus sit on a level base
+        vec3 bank = (modelMatrix * vec4(aBank.xyz, 1.)).xyz;
+        float base = aBase + bank.y - aBank.y;
+        vFlat = smoothstep(base + 8., base, w.y);
+        w.y = max(w.y, base);
         vW = w.xyz;
-        vN = normalize(mat3(m) * normal);
+        // each puff's normal leans toward the normal of the whole heap, so
+        // the cloud shades as one soft mass rather than a pile of balls
+        vec3 own = normalize(mat3(m) * normal);
+        vec3 heap = normalize((w.xyz - bank) * vec3(1., 2.2, 1.) / aBank.w);
+        vN = normalize(mix(own, heap, 0.58));
+        vN = normalize(mix(vN, vec3(0., -1., 0.), vFlat * 0.85));
         vShade = aShade;
         gl_Position = projectionMatrix * viewMatrix * w;
       }`,
     fragmentShader: /* glsl */ `
-      uniform vec3 uLight, uLit, uMid, uShade, uUnder;
-      uniform float uSunUp, uBright, uTime;
+      uniform vec3 uLight, uLit, uMid, uShade, uUnder, uGlow, uZenith, uHorizon;
+      uniform float uSunUp, uBright, uTime, uAfter;
       varying vec3 vN, vW;
-      varying float vShade;
+      varying float vShade, vFlat;
       ${NOISE}
       ${FOG}
       void main() {
-        vec3 n = normalize(vN);
-        vec3 q = vW * 0.022;
-        n = normalize(n + (vec3(vnoise3(q), vnoise3(q + 5.2), vnoise3(q - 9.1)) - 0.5) * 0.9);
+        vec3 n0 = normalize(vN);
+        vec3 q = vW * 0.018 + vec3(uTime * 0.01, 0., 0.);
+        vec3 n = normalize(n0 + (vec3(vnoise3(q), vnoise3(q + 5.2), vnoise3(q - 9.1)) - 0.5) * 0.7);
         float l = dot(n, uLight);
-        vec3 c = mix(uShade, uMid, smoothstep(-0.45, 0.1, l));
-        c = mix(c, uLit * uBright, smoothstep(0.15, 0.6, l));
-        c *= mix(0.8, 1., smoothstep(0., 0.6, vShade));
-        c = mix(c, uUnder, smoothstep(-0.1, -0.75, n.y) * (1. - vShade) * 0.75);
+        vec3 c = mix(uShade, uMid, smoothstep(-0.5, 0.15, l));
+        c = mix(c, uLit * uBright, smoothstep(0.2, 0.7, l));
+        c *= mix(0.82, 1., smoothstep(0., 0.6, vShade));
+        float under = max(smoothstep(-0.05, -0.7, n.y) * (1. - vShade), vFlat);
+        c = mix(c, uUnder, under * 0.7);
+        // just after sunset, and before sunrise, the sun lights them from below
+        vec2 sunH = normalize(uSunDir.xz + 1e-4), toCloud = normalize(vW.xz - cameraPosition.xz + 1e-4);
+        float toward = pow(max(dot(sunH, toCloud), 0.), 1.5);
+        c += uGlow * under * uAfter * (0.3 + 0.9 * toward);
         vec3 V = normalize(cameraPosition - vW);
         float edge = pow(1. - max(dot(n, V), 0.), 3.);
         float behind = pow(max(dot(-V, uLight), 0.), 5.);
-        c += uLit * edge * (0.08 + 1.4 * behind) * mix(0.3, 1., uSunUp);
+        c += uLit * edge * (0.05 + 1.2 * behind) * mix(0.25, 1., uSunUp);
+        // and the very edge melts into the sky behind it
+        vec3 sky = mix(uHorizon, uZenith, pow(clamp(-V.y, 0., 1.), 0.42));
+        c = mix(c, sky, pow(1. - max(dot(n0, V), 0.), 4.) * 0.5);
         gl_FragColor = vec4(applyFog(c, vW), 1.);
       }`,
   });

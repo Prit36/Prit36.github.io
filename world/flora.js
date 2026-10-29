@@ -670,6 +670,76 @@ export function createGrass() {
   };
 }
 
+// The small stuff underfoot, near you: pebbles and bits of shell on the
+// beach (and under the clear water at its edge), stones kicked up along the
+// paths and scattered down the steep ground. Like the grass, a field of them
+// travels with you and each one finds what kind of ground it's on.
+export function createClutter(count = 7000, size = 26) {
+  const base = new THREE.IcosahedronGeometry(1, 0);
+  const g = new THREE.InstancedBufferGeometry();
+  g.setIndex(base.index);
+  g.setAttribute("position", base.attributes.position);
+  g.setAttribute("normal", base.attributes.normal);
+  const r = rng(13);
+  const data = new Float32Array(count * 4);
+  for (let i = 0; i < count; i++) data.set([r(), r(), r(), r()], i * 4);
+  g.setAttribute("aBlade", new THREE.InstancedBufferAttribute(data, 4));
+  g.instanceCount = count;
+  g.boundingSphere = new THREE.Sphere(new THREE.Vector3(), 1e5);
+  const uniforms = { uTile: { value: new THREE.Vector4(0, 0, size, 0) } };
+  const mat = stylize(new THREE.MeshLambertMaterial(), {
+    key: "clutter",
+    defines: { WRAP: "0.2", RIM: "0.15", CLUTTER_TILE: size.toFixed(1) },
+    uniforms,
+    noiseVertex: true,
+    vertexPars: /* glsl */ `
+      attribute vec4 aBlade;
+      uniform vec4 uTile;
+      varying vec3 vClutterCol;
+      ${GROUND}`,
+    vertexHead: /* glsl */ `
+      vec2 rel = aBlade.xy * uTile.z - uTile.xy;
+      rel -= uTile.z * floor(rel / uTile.z + 0.5);
+      vec2 root = uTile.xy + rel;
+      float dist = length(root - cameraPosition.xz);
+      vec4 gd = groundData(root);
+      vec4 sf = surfaceData(root);
+      float h = gd.r;
+      float beach = sf.x * step(-1.6, h) * (1. - smoothstep(2.6, 3.4, h));
+      float path = sf.y * (1. - beach);
+      float steep = smoothstep(0.32, 0.55, sf.z) * (1. - beach) * step(0.4, h);
+      float wild = step(0.4, h) * (1. - beach) * (1. - path) * (1. - steep);
+      float want = beach * (0.16 + 0.5 * (1. - sf.x) + 0.25 * smoothstep(0.3, -0.6, h)) + path * 0.4 + steep * 0.36 + wild * (0.02 + 0.05 * sf.w);
+      want *= 0.5 + 0.9 * smoothstep(0.35, 0.75, vnoise(root * 0.6 + 2.));
+      float keep = step(aBlade.z, want) * (1. - smoothstep(CLUTTER_TILE * 0.32, CLUTTER_TILE * 0.48, dist));
+      float k = fract(aBlade.w * 17.3);
+      float shell = beach * step(0.93, k) * step(0.2, h);
+      float s = mix(0.035, 0.12, pow(fract(aBlade.w * 5.7), 1.6)) * mix(1., 1.9, steep) * mix(1., 0.7, shell) * keep;
+      float ang = aBlade.w * 6.2831;
+      mat2 rot = mat2(cos(ang), sin(ang), -sin(ang), cos(ang));
+      vec3 lp = position * vec3(1., mix(0.45, 0.22, shell), 0.8 + 0.4 * fract(aBlade.w * 3.1)) * s;
+      lp.xz = rot * lp.xz;
+      vec3 gPos = vec3(root.x, h - s * 0.12, root.y) + lp;
+      vec3 objectNormal = normalize(vec3(rot * (normal.xz / vec2(1., 0.8)), normal.y / mix(0.45, 0.22, shell)).xzy);
+      float tone = 0.75 + 0.45 * fract(aBlade.w * 11.9);
+      vec3 stone = mix(vec3(0.78, 0.74, 0.66), vec3(0.55, 0.53, 0.5), fract(aBlade.w * 23.1)) * tone;
+      vClutterCol = shell > 0.5 ? mix(vec3(0.9, 0.86, 0.8), vec3(0.88, 0.7, 0.64), step(0.5, fract(aBlade.w * 31.))) : stone * mix(vec3(1.), vec3(0.92, 0.86, 0.76), beach);
+      vClutterCol *= h < 0.05 ? vec3(0.8, 0.86, 0.84) : vec3(1.);`,
+    vertexBegin: "vec3 transformed = gPos;",
+    fragmentPars: "varying vec3 vClutterCol;",
+    color: "diffuseColor.rgb = vClutterCol;",
+  });
+  const mesh = new THREE.Mesh(g, mat);
+  mesh.frustumCulled = false;
+  mesh.receiveShadow = true;
+  mesh.userData.full = count;
+  return {
+    mesh,
+    update(cam) { uniforms.uTile.value.x = cam.x; uniforms.uTile.value.y = cam.z; },
+    set density(k) { g.instanceCount = Math.floor(count * k); },
+  };
+}
+
 // Wildflowers near you: a stalk and a head of petals, turned up to the
 // sun, in drifts of one kind (poppies here, daisies there) through the
 // meadows, and a few anywhere the grass grows.

@@ -1,5 +1,5 @@
 import * as THREE from "three";
-import { heightAt, groundAt, grassAt, rng } from "./land.js";
+import { heightAt, groundAt, grassAt, rng, smooth } from "./land.js";
 import { stylize, toonish, U } from "./style.js";
 
 // Things that move by themselves: gulls over the cove, butterflies over the
@@ -9,12 +9,14 @@ import { stylize, toonish, U } from "./style.js";
 
 const r = rng(11);
 
-export function createGulls(count = 16) {
+// A gull, as a handful of triangles: white body, grey wings with black tips.
+function gullGeometry() {
   const pos = [], col = [];
   const tri = (a, b, c, color) => { pos.push(...a, ...b, ...c); for (let i = 0; i < 3; i++) col.push(...color); };
-  const white = [0.95, 0.94, 0.9], grey = [0.55, 0.6, 0.66], tip = [0.08, 0.09, 0.1];
+  const white = [0.95, 0.94, 0.9], grey = [0.55, 0.6, 0.66], tip = [0.08, 0.09, 0.1], beak = [0.93, 0.72, 0.2];
   const n = [0, 0, 0.42], t = [0, 0, -0.38], u = [0, 0.09, 0], d = [0, -0.07, 0.02], lft = [-0.08, 0, 0.05], rgt = [0.08, 0, 0.05];
   for (const [a, b] of [[u, rgt], [rgt, d], [d, lft], [lft, u]]) { tri(n, a, b, white); tri(t, b, a, white); }
+  tri([0, 0.02, 0.42], [0.012, 0, 0.5], [-0.012, 0, 0.5], beak);
   for (const s of [-1, 1]) {
     const rootF = [0.07 * s, 0.02, 0.15], rootB = [0.07 * s, 0.02, -0.1], elbow = [0.42 * s, 0.04, 0.1], wtip = [0.85 * s, 0, -0.2];
     tri(rootF, rootB, elbow, grey);
@@ -24,48 +26,156 @@ export function createGulls(count = 16) {
   geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
   geo.setAttribute("color", new THREE.Float32BufferAttribute(col, 3));
   geo.computeVertexNormals();
+  return geo;
+}
+// Wings beat (aFlap 1) or fold along the back (aFlap 0, a gull standing).
+const uStartle = { value: 0 };
+const gullMaterial = () => stylize(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }), {
+  key: "gull",
+  defines: { RIM: "0.3", WRAP: "0.3" },
+  uniforms: { uStartle },
+  vertexPars: "uniform float uStartle;\nattribute float aPhase, aFlap;",
+  vertex: `
+    float wing = max(abs(position.x) - 0.07, 0.);
+    float flapping = max(smoothstep(-0.1, 0.7, sin(uTime * 0.37 + aPhase)), uStartle) * smoothstep(0.5, 1., aFlap);
+    transformed.y += wing * (sin(uTime * (8. + uStartle * 4.) + aPhase * 5.) * 0.95 * flapping + 0.16 * aFlap);
+    float fold = 1. - aFlap;
+    transformed.x = mix(transformed.x, sign(position.x) * (0.075 + wing * 0.06), fold);
+    transformed.z -= wing * 0.45 * fold;
+    transformed.y += wing * 0.12 * fold;`,
+  normal: "normal = normalize(vNormal);",
+});
+
+export function createGulls(count = 16) {
+  const geo = gullGeometry();
   const phases = new Float32Array(count).map(() => r() * 6.28);
   geo.setAttribute("aPhase", new THREE.InstancedBufferAttribute(phases, 1));
-  const uStartle = { value: 0 };
-  const mat = stylize(new THREE.MeshLambertMaterial({ vertexColors: true, side: THREE.DoubleSide }), {
-    key: "gull",
-    defines: { RIM: "0.3", WRAP: "0.3" },
-    uniforms: { uStartle },
-    vertexPars: "uniform float uStartle;\nattribute float aPhase;",
-    vertex: `
-      float wing = max(abs(position.x) - 0.07, 0.);
-      float flapping = max(smoothstep(-0.1, 0.7, sin(uTime * 0.37 + aPhase)), uStartle);
-      transformed.y += wing * (sin(uTime * (8. + uStartle * 4.) + aPhase * 5.) * 0.95 * flapping + 0.16);`,
-    normal: "normal = normalize(vNormal);",
-  });
-  const mesh = new THREE.InstancedMesh(geo, mat, count);
+  geo.setAttribute("aFlap", new THREE.InstancedBufferAttribute(new Float32Array(count).fill(1), 1));
+  const mesh = new THREE.InstancedMesh(geo, gullMaterial(), count);
   mesh.castShadow = true;
   mesh.frustumCulled = false;
   mesh.layers.enable(1);
+  // Each wheels round its own centre, rising and falling on the air, banking
+  // into the turn, some days lazier than others.
   const birds = Array.from({ length: count }, (_, i) => ({
     cx: i < 10 ? -20 + r() * 80 : -190 + r() * 40, cz: i < 10 ? -60 + r() * 60 : -60 + r() * 30,
     rad: 25 + r() * 90, alt: 16 + r() * 40, sp: (r() < 0.5 ? -1 : 1) * (0.08 + r() * 0.1), ang: r() * 6.28, ph: phases[i],
+    drift: 0.4 + r() * 0.8, p: new THREE.Vector3(),
   }));
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), p = new THREE.Vector3(), s = new THREE.Vector3();
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), s = new THREE.Vector3();
   let startle = 0;
   const update = (dt, t, night) => {
     startle = Math.max(0, startle - dt * 0.12);
     uStartle.value = Math.min(1, startle * 1.5);
-    const show = night > 0.75 ? 0 : 1.3;
+    // they go to roost as the light goes
+    const show = 1.3 * (1 - smooth(0.55, 0.8, night));
     birds.forEach((b, i) => {
-      b.ang += b.sp * dt * (1 + startle * 2.5);
-      const rad = b.rad * (1 + startle * 0.6);
-      p.set(b.cx + Math.cos(b.ang) * rad, b.alt + Math.sin(t * 0.3 + b.ph) * 4 + startle * 22, b.cz + Math.sin(b.ang) * rad);
+      const lazy = 0.75 + 0.25 * Math.sin(t * 0.05 * b.drift + b.ph);
+      b.ang += b.sp * dt * lazy * (1 + startle * 2.5);
+      const rad = b.rad * (1 + startle * 0.6) * (1 + 0.12 * Math.sin(t * 0.07 + b.ph * 3));
+      b.p.set(b.cx + Math.cos(b.ang) * rad, b.alt + Math.sin(t * 0.3 * b.drift + b.ph) * 4 + startle * 22, b.cz + Math.sin(b.ang) * rad);
       const sg = Math.sign(b.sp);
-      e.set(0, Math.atan2(-Math.sin(b.ang) * sg, Math.cos(b.ang) * sg), -sg * 0.35, "YXZ");
-      mesh.setMatrixAt(i, m.compose(p, q.setFromEuler(e), s.setScalar(show)));
+      const bank = -sg * (0.25 + 0.2 * Math.sin(t * 0.21 + b.ph)), pitch = Math.cos(t * 0.3 * b.drift + b.ph) * 0.12;
+      e.set(pitch, Math.atan2(-Math.sin(b.ang) * sg, Math.cos(b.ang) * sg), bank, "YXZ");
+      mesh.setMatrixAt(i, m.compose(b.p, q.setFromEuler(e), s.setScalar(show)));
     });
     mesh.instanceMatrix.needsUpdate = true;
   };
-  return { mesh, update, startle: () => { startle = 1; }, birds };
+  // the gull nearest a point, for its call to come from
+  const nearest = (x, z) => {
+    let best = null, bd = Infinity;
+    for (const b of birds) { const d = Math.hypot(b.p.x - x, b.p.z - z) + Math.abs(b.p.y) * 0.3; if (d < bd) { bd = d; best = b; } }
+    return best;
+  };
+  return { mesh, update, startle: () => { startle = 1; }, birds, nearest };
 }
 
-// Butterflies, out by day over the flowers near you
+// Gulls standing about on the pier posts and the boats: they turn their
+// heads, shuffle, and when you come too close (or something bangs), they
+// lift off with a clatter, wheel round the harbour for a while, and settle
+// back where they were.
+export function createPerchers(spots) {
+  const count = spots.length;
+  const geo = gullGeometry();
+  const flap = new Float32Array(count);
+  geo.setAttribute("aPhase", new THREE.InstancedBufferAttribute(new Float32Array(count).map(() => r() * 6.28), 1));
+  const flapAttr = new THREE.InstancedBufferAttribute(flap, 1);
+  geo.setAttribute("aFlap", flapAttr);
+  const mesh = new THREE.InstancedMesh(geo, gullMaterial(), count);
+  mesh.castShadow = true;
+  mesh.frustumCulled = false;
+  mesh.layers.enable(1);
+  const birds = spots.map(([x, y, z], i) => ({
+    home: new THREE.Vector3(x, y, z), p: new THREE.Vector3(x, y, z), v: new THREE.Vector3(),
+    yaw: r() * 6.28, look: 0, state: "sit", t: 0, i, wing: 0, ph: r() * 6.28, circle: new THREE.Vector3(),
+  }));
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), at = new THREE.Vector3(), want = new THREE.Vector3();
+  const size = new THREE.Vector3(1.1, 1.1, 1.1);
+  let fright = 0;
+  const takeOff = (b, from) => {
+    if (b.state !== "sit") return false;
+    b.state = "fly";
+    b.t = 22 + r() * 30;
+    const ax = b.p.x - from.x, az = b.p.z - from.z, al = Math.hypot(ax, az) || 1;
+    b.circle.set(b.p.x + (ax / al) * 18, b.home.y + 11 + r() * 10, b.p.z + (az / al) * 18);
+    b.v.set((ax / al) * 3, 4.5, (az / al) * 3);
+    return true;
+  };
+  const update = (dt, t, player, night, events) => {
+    let flew = 0;
+    for (const b of birds) {
+      if (b.state === "sit") {
+        b.p.copy(b.home);
+        // a look about now and then, and a shuffle round on the post
+        b.look += (Math.sin(t * 0.7 + b.ph) * Math.sin(t * 0.23 + b.i) * 0.9 - b.look) * Math.min(1, dt * 4);
+        if (r() < dt * 0.05) b.yaw += (r() - 0.5) * 1.6;
+        b.wing += (0 - b.wing) * Math.min(1, dt * 6);
+        const d = Math.hypot(player.pos.x - b.p.x, player.pos.z - b.p.z);
+        const dy = Math.abs(player.pos.y + 1 - b.p.y);
+        // dozing at night, they let you come closer
+        if ((d < (night > 0.8 ? 2.8 : 5.5) && dy < 6) || fright > 0) { if (takeOff(b, player.pos)) flew++; }
+      } else {
+        b.t -= dt;
+        // round and round over the water, then back down to the post
+        const home = b.t <= 0;
+        if (home) want.copy(b.home);
+        else {
+          const a = t * 0.35 + b.ph;
+          want.set(b.circle.x + Math.cos(a) * 14, b.circle.y + Math.sin(t * 0.5 + b.ph) * 2, b.circle.z + Math.sin(a) * 14);
+        }
+        want.sub(b.p);
+        const dist = want.length();
+        const speed = home ? Math.min(7, 1.2 + dist * 0.9) : 8;
+        want.multiplyScalar(speed / Math.max(dist, 1e-3));
+        b.v.lerp(want, Math.min(1, dt * (home ? 2.4 : 1.3)));
+        b.p.addScaledVector(b.v, dt);
+        if (Math.hypot(b.v.x, b.v.z) > 0.3) {
+          const yaw = Math.atan2(b.v.x, b.v.z);
+          b.yaw += (((yaw - b.yaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * Math.min(1, dt * 5);
+        }
+        b.wing += (1 - b.wing) * Math.min(1, dt * 8);
+        if (home && dist < 0.25) {
+          // landed: wings in, and it won't go again for a moment
+          b.state = "sit";
+          b.p.copy(b.home);
+          events?.land?.(b.p);
+        }
+      }
+      flap[b.i] = b.wing;
+      const bob = b.state === "sit" ? 0 : Math.sin(t * 9 + b.ph) * 0.04;
+      e.set(b.state === "sit" ? 0.05 : -b.v.y * 0.05, b.yaw + (b.state === "sit" ? b.look * 0.3 : 0), b.state === "sit" ? 0 : -Math.sin(t * 0.35 + b.ph) * 0.3, "YXZ");
+      mesh.setMatrixAt(b.i, m.compose(at.set(b.p.x, b.p.y + 0.1 + bob, b.p.z), q.setFromEuler(e), size));
+    }
+    fright = Math.max(0, fright - dt);
+    flapAttr.needsUpdate = true;
+    mesh.instanceMatrix.needsUpdate = true;
+    if (flew) events?.lift?.(birds.find((b) => b.state === "fly").p, flew);
+  };
+  return { mesh, update, birds, startle: () => { fright = 0.2; } };
+}
+
+// Butterflies, out by day over the flowers near you; at night, pale moths
+// round the lamps instead.
 export function createButterflies(count = 30) {
   const pos = [], col = [];
   for (const s of [-1, 1]) {
@@ -88,6 +198,8 @@ export function createButterflies(count = 30) {
       transformed.x = x * cos(a);
       transformed.y = abs(x) * sin(a);`,
     normal: "normal = normalize(vNormal);",
+    // a moth's wings catch the lamplight
+    emissive: "totalEmissiveRadiance += vColor * smoothstep(0.4, 0.8, uNight) * 0.7;",
   });
   const mesh = new THREE.InstancedMesh(geo, mat, count);
   mesh.frustumCulled = false;
@@ -97,24 +209,48 @@ export function createButterflies(count = 30) {
     mesh.setColorAt(i, c.set(COLS[i % COLS.length]));
     return { home: new THREE.Vector3(1e5, 0, 0), p: new THREE.Vector3(1e5, 0, 0), ph: r() * 6.28, sp: 0.6 + r() * 0.6 };
   });
-  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), s = new THREE.Vector3(), last = new THREE.Vector3();
-  const update = (dt, t, player, day) => {
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), s = new THREE.Vector3(), last = new THREE.Vector3(), want = new THREE.Vector3();
+  const moth = new THREE.Color("#e9e2cf");
+  let wasDay = null;
+  // lamps: [x, y, z] of everything lit that a moth might go round
+  const update = (dt, t, player, day, lamps = []) => {
+    const isDay = day > 0.4;
+    if (isDay !== wasDay) {
+      // a change of shift: everyone finds somewhere new
+      wasDay = isDay;
+      flies.forEach((f, i) => { f.home.set(1e5, 0, 0); f.p.set(1e5, 0, 0); mesh.setColorAt(i, isDay ? c.set(COLS[i % COLS.length]) : moth); });
+      mesh.instanceColor.needsUpdate = true;
+    }
     flies.forEach((f, i) => {
       if (f.home.distanceTo(player) > 40 || r() < dt * 0.02) {
-        for (let k = 0; k < 8; k++) {
-          const a = r() * 6.28, d = 6 + r() * 26;
-          const x = player.x + Math.cos(a) * d, z = player.z + Math.sin(a) * d;
-          if (grassAt(x, z) > 0.25 && heightAt(x, z) > 1) { f.home.set(x, heightAt(x, z), z); break; }
+        f.home.set(1e5, 0, 0);
+        if (isDay) {
+          for (let k = 0; k < 8; k++) {
+            const a = r() * 6.28, d = 6 + r() * 26;
+            const x = player.x + Math.cos(a) * d, z = player.z + Math.sin(a) * d;
+            if (grassAt(x, z) > 0.25 && heightAt(x, z) > 1) { f.home.set(x, heightAt(x, z), z); break; }
+          }
+        } else if (lamps.length) {
+          // the nearest lamps that are lit
+          let best = null, bd = 38;
+          for (let k = 0; k < 6; k++) {
+            const l = lamps[Math.floor(r() * lamps.length)];
+            const d = Math.hypot(l[0] - player.x, l[2] - player.z);
+            if (d < bd) { bd = d; best = l; }
+          }
+          if (best) f.home.set(best[0], best[1] - 0.7, best[2]);
         }
         if (f.p.x > 1e4) f.p.copy(f.home);
       }
       last.copy(f.p);
       const tt = t * f.sp + f.ph;
-      const want = new THREE.Vector3(f.home.x + Math.sin(tt * 0.7) * 3 + Math.sin(tt * 2.3) * 0.6, f.home.y + 0.7 + Math.sin(tt * 1.7) * 0.45 + Math.max(0, Math.sin(tt * 0.31)) * 1.4, f.home.z + Math.cos(tt * 0.5) * 3 + Math.cos(tt * 2.9) * 0.5);
-      f.p.lerp(want, Math.min(1, dt * 2));
+      if (isDay) want.set(f.home.x + Math.sin(tt * 0.7) * 3 + Math.sin(tt * 2.3) * 0.6, f.home.y + 0.7 + Math.sin(tt * 1.7) * 0.45 + Math.max(0, Math.sin(tt * 0.31)) * 1.4, f.home.z + Math.cos(tt * 0.5) * 3 + Math.cos(tt * 2.9) * 0.5);
+      // moths: tight, giddy loops round the light, now and then knocking against it
+      else want.set(f.home.x + Math.sin(tt * 3.1) * 0.55 + Math.sin(tt * 7.3) * 0.15, f.home.y + 0.7 + Math.sin(tt * 2.3) * 0.35, f.home.z + Math.cos(tt * 2.7) * 0.55 + Math.cos(tt * 6.1) * 0.15);
+      f.p.lerp(want, Math.min(1, dt * (isDay ? 2 : 5)));
       const vx = f.p.x - last.x, vz = f.p.z - last.z;
       e.set(0, Math.atan2(vx, vz), 0, "YXZ");
-      mesh.setMatrixAt(i, m.compose(f.p, q.setFromEuler(e), s.setScalar(day > 0.4 && f.home.x < 1e4 ? 1.1 : 0)));
+      mesh.setMatrixAt(i, m.compose(f.p, q.setFromEuler(e), s.setScalar(f.home.x < 1e4 ? (isDay ? 1.1 : 0.6) : 0)));
     });
     mesh.instanceMatrix.needsUpdate = true;
   };
@@ -589,4 +725,150 @@ export function createDolphins(count = 4) {
     if (Math.random() < dt * 0.4) events?.call(pod.from.clone().addScaledVector(pod.dir, pod.went));
   };
   return { mesh, update, pod };
+}
+
+// Shoals of little fish in the clear shallows by the beach and the pier.
+// They drift and turn together, and when you wade in among them they
+// scatter, then gather again further off.
+export function createShoals(centers, per = 16) {
+  const pos = [];
+  const v = (x, y, z) => pos.push(x, y, z);
+  // a body of two pyramids, and a tail
+  const H = [[0, 0.035, 0], [0.026, 0, 0], [0, -0.03, 0], [-0.026, 0, 0]];
+  for (let k = 0; k < 4; k++) {
+    const a = H[k], b = H[(k + 1) % 4];
+    v(0, 0, 0.09); v(...a); v(...b);
+    v(0, 0, -0.07); v(...b); v(...a);
+  }
+  v(0, 0, -0.06); v(0, 0.035, -0.12); v(0, -0.035, -0.12);
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.Float32BufferAttribute(pos, 3));
+  geo.computeVertexNormals();
+  const mat = stylize(new THREE.MeshLambertMaterial({ color: "#9fb8c2", side: THREE.DoubleSide }), {
+    key: "fry",
+    defines: { RIM: "0.6", WRAP: "0.2" },
+    vertex: "transformed.x += sin(uTime * 14. + float(gl_InstanceID) * 1.7) * 0.012 * smoothstep(0.0, -0.12, position.z);",
+  });
+  const count = centers.length * per;
+  const mesh = new THREE.InstancedMesh(geo, mat, count);
+  mesh.frustumCulled = false;
+  const shoals = centers.map(([x, z]) => ({
+    home: new THREE.Vector2(x, z), c: new THREE.Vector3(x, -0.6, z), v: new THREE.Vector3(), fear: 0, ph: r() * 6.28,
+    fish: Array.from({ length: per }, () => ({ o: new THREE.Vector3((r() - 0.5) * 2.4, (r() - 0.5) * 0.3, (r() - 0.5) * 2.4), p: new THREE.Vector3(x, -0.6, z), yaw: 0, ph: r() * 6.28 })),
+  }));
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), one = new THREE.Vector3(1, 1, 1), want = new THREE.Vector3();
+  const update = (dt, t, player) => {
+    let i = 0;
+    for (const s of shoals) {
+      // wander about home, keep to water between knee and chest deep
+      const a = t * 0.11 + s.ph;
+      want.set(s.home.x + Math.cos(a) * 7 + Math.sin(a * 2.3) * 3 - s.c.x, 0, s.home.y + Math.sin(a * 0.8) * 7 - s.c.z);
+      const dx = s.c.x - player.pos.x, dz = s.c.z - player.pos.z, dp = Math.hypot(dx, dz);
+      const near = dp < 5.5 && player.pos.y < 1.2;
+      if (near) s.fear = 1.6;
+      s.fear = Math.max(0, s.fear - dt);
+      if (s.fear > 0) want.set(dx / (dp || 1) * 9, 0, dz / (dp || 1) * 9);
+      else want.multiplyScalar(0.25);
+      s.v.lerp(want, Math.min(1, dt * (s.fear > 0 ? 4 : 0.6)));
+      const nx = s.c.x + s.v.x * dt, nz = s.c.z + s.v.z * dt, h = heightAt(nx, nz);
+      if (h < -0.45 && h > -4) { s.c.x = nx; s.c.z = nz; } else s.v.multiplyScalar(-0.5);
+      const floor = heightAt(s.c.x, s.c.z);
+      s.c.y = Math.max(floor + 0.2, -0.35 - Math.min(0.8, -floor * 0.3));
+      const spread = 1 + s.fear * 1.4;
+      for (const f of s.fish) {
+        want.set(s.c.x + f.o.x * spread + Math.sin(t * 0.9 + f.ph) * 0.4, s.c.y + f.o.y, s.c.z + f.o.z * spread + Math.cos(t * 0.8 + f.ph) * 0.4);
+        const ox = f.p.x, oz = f.p.z;
+        f.p.lerp(want, Math.min(1, dt * (s.fear > 0 ? 5 : 1.6)));
+        const mx = f.p.x - ox, mz = f.p.z - oz;
+        if (mx * mx + mz * mz > 1e-7) {
+          const yaw = Math.atan2(mx, mz);
+          f.yaw += (((yaw - f.yaw + Math.PI * 3) % (Math.PI * 2)) - Math.PI) * Math.min(1, dt * 8);
+        }
+        e.set(0, f.yaw, 0);
+        mesh.setMatrixAt(i++, m.compose(f.p, q.setFromEuler(e), one));
+      }
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  };
+  return { mesh, update };
+}
+
+// Crabs on the beach. They sit, sidle a step this way or that, and if you
+// come near they scuttle off sideways to the water and are gone for a while.
+export function createCrabs(spots) {
+  const parts = [];
+  const put = (g, m) => { const n = g.index ? g.toNonIndexed() : g; n.applyMatrix4(m); parts.push(n); };
+  const T = (x, y, z, sx, sy, sz, ry = 0, rz = 0) => new THREE.Matrix4().compose(new THREE.Vector3(x, y, z), new THREE.Quaternion().setFromEuler(new THREE.Euler(0, ry, rz)), new THREE.Vector3(sx, sy, sz));
+  const ball = new THREE.SphereGeometry(1, 10, 6), stick = new THREE.CylinderGeometry(1, 1, 1, 4);
+  put(ball.clone(), T(0, 0.045, 0, 0.09, 0.04, 0.07));
+  for (const s of [-1, 1]) {
+    put(ball.clone(), T(s * 0.07, 0.05, 0.08, 0.03, 0.022, 0.035));
+    put(ball.clone(), T(s * 0.025, 0.085, 0.05, 0.01, 0.014, 0.01));
+    for (let k = 0; k < 3; k++) put(stick.clone(), T(s * 0.1, 0.025, -0.03 + k * 0.03, 0.007, 0.09, 0.007, 0, s * 1.15));
+  }
+  const total = parts.reduce((n, g) => n + g.attributes.position.count, 0);
+  const P = new Float32Array(total * 3), N = new Float32Array(total * 3);
+  let o = 0;
+  for (const g of parts) { P.set(g.attributes.position.array, o); N.set(g.attributes.normal.array, o); o += g.attributes.position.array.length; }
+  const geo = new THREE.BufferGeometry();
+  geo.setAttribute("position", new THREE.BufferAttribute(P, 3));
+  geo.setAttribute("normal", new THREE.BufferAttribute(N, 3));
+  const mesh = new THREE.InstancedMesh(geo, toonish("#c9542f", { defines: { RIM: "0.35", WRAP: "0.25" } }), spots.length);
+  mesh.castShadow = true;
+  mesh.frustumCulled = false;
+  const crabs = spots.map(([x, z], i) => ({ home: new THREE.Vector2(x, z), p: new THREE.Vector3(x, heightAt(x, z), z), yaw: r() * 6.28, state: "idle", t: r() * 4, dir: 1, gone: 0, i, ph: r() * 6.28 }));
+  const m = new THREE.Matrix4(), q = new THREE.Quaternion(), e = new THREE.Euler(), s = new THREE.Vector3(), at = new THREE.Vector3();
+  const update = (dt, t, player, events) => {
+    for (const c of crabs) {
+      c.t -= dt;
+      let moving = 0;
+      if (c.state === "gone") {
+        if (c.t <= 0) {
+          // back up the beach, somewhere near where it lives
+          for (let k = 0; k < 10; k++) {
+            const x = c.home.x + (r() - 0.5) * 8, z = c.home.y + (r() - 0.5) * 8, h = heightAt(x, z);
+            if (h > 0.25 && h < 1.6 && Math.hypot(x - player.pos.x, z - player.pos.z) > 12) { c.p.set(x, h, z); c.state = "idle"; c.t = 2; break; }
+          }
+          if (c.state === "gone") c.t = 3;
+        }
+        s.setScalar(0);
+      } else {
+        const d = Math.hypot(player.pos.x - c.p.x, player.pos.z - c.p.z);
+        if (c.state !== "flee" && d < 3.2) {
+          c.state = "flee";
+          // which way is the sea? downhill
+          const e2 = 1.5, gx = heightAt(c.p.x + e2, c.p.z) - heightAt(c.p.x - e2, c.p.z), gz = heightAt(c.p.x, c.p.z + e2) - heightAt(c.p.x, c.p.z - e2);
+          c.yaw = Math.atan2(-gx, -gz) - Math.PI / 2;
+          c.dir = 1;
+          events?.scuttle?.(c.p);
+        }
+        if (c.state === "flee") moving = 2.4;
+        else if (c.state === "walk") moving = 0.5;
+        else if (c.t <= 0) {
+          // a sidle now and then
+          if (r() < 0.5) { c.state = "walk"; c.dir = r() < 0.5 ? -1 : 1; c.t = 0.6 + r() * 1.2; }
+          else { c.yaw += (r() - 0.5) * 0.8; c.t = 1.5 + r() * 3; }
+        }
+        if (c.state === "walk" && c.t <= 0) { c.state = "idle"; c.t = 1 + r() * 4; }
+        if (moving) {
+          // crabs go sideways
+          const sx = Math.cos(c.yaw) * c.dir, sz = -Math.sin(c.yaw) * c.dir;
+          const nx = c.p.x + sx * moving * dt, nz = c.p.z + sz * moving * dt, h = heightAt(nx, nz);
+          if (c.state === "walk" && (h < 0.2 || h > 2)) { c.state = "idle"; c.t = 1; }
+          else { c.p.set(nx, Math.max(h, -0.3), nz); }
+          if (c.state === "flee" && h < -0.15) {
+            c.state = "gone";
+            c.t = 18 + r() * 20;
+            events?.plop?.(c.p);
+          }
+        }
+        s.setScalar(c.state === "gone" ? 0 : 1);
+      }
+      const jig = moving ? Math.sin(t * 40 + c.ph) * 0.006 : 0;
+      e.set(0, c.yaw, moving ? Math.sin(t * 30 + c.ph) * 0.08 : 0);
+      mesh.setMatrixAt(c.i, m.compose(at.set(c.p.x, c.p.y + jig, c.p.z), q.setFromEuler(e), s));
+    }
+    mesh.instanceMatrix.needsUpdate = true;
+  };
+  return { mesh, update, crabs };
 }

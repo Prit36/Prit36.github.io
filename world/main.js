@@ -1,11 +1,11 @@
 import * as THREE from "three";
-import { heightAt, groundAt, pushOut, field, buildTerrain, smooth, PATHS, STEP_UP, ISLANDS, rng } from "./land.js";
+import { heightAt, groundAt, pushOut, field, buildTerrain, smooth, seaAt, PATHS, STEP_UP, ISLANDS, rng } from "./land.js";
 import { lightOf, palette, createSky, createClouds, createRanges, PHASES, sunAt } from "./sky.js";
 import { createWater, createRipples } from "./water.js";
 import { buildWorld, createWindows, createGlows, createBulbs } from "./build.js";
-import { createFlora, createGrass } from "./flora.js";
-import { createGulls, createButterflies, createMotes, createFireflies, createFish, createStones, createBall, createCats, createDolphins } from "./life.js";
-import { createFireworks } from "./fx.js";
+import { createFlora, createGrass, createClutter } from "./flora.js";
+import { createGulls, createPerchers, createButterflies, createMotes, createFireflies, createFish, createShoals, createCrabs, createStones, createBall, createCats, createDolphins } from "./life.js";
+import { createFireworks, createSpray, createSmoke } from "./fx.js";
 import { createBalloon } from "./balloon.js";
 import { createPost } from "./post.js";
 import { createSound } from "./sound.js";
@@ -21,6 +21,12 @@ const intro = $("intro");
 const hud = $("hud");
 const touch = matchMedia("(pointer: coarse)").matches && !matchMedia("(pointer: fine)").matches;
 document.documentElement.classList.toggle("is-touch", touch);
+// Settings that stay between visits, if the browser lets them
+const stored = (k, d) => { try { return localStorage.getItem(k) ?? d; } catch { return d; } };
+const store = (k, v) => { try { localStorage.setItem(k, v); } catch { /* storage is optional */ } };
+// A steadier camera, for anyone who'd rather not have the bob and the sway
+const prefersCalm = matchMedia("(prefers-reduced-motion: reduce)");
+let calm = stored("world-calm", prefersCalm.matches ? "1" : "0") === "1";
 const fail = (msg) => {
   goBtn.textContent = "Can't paint the bay here";
   $("error").hidden = false;
@@ -49,8 +55,10 @@ await new Promise((r) => { requestAnimationFrame(() => requestAnimationFrame(r))
 const scene = new THREE.Scene();
 // Turns the haze on in every material; the haze itself is the bay's own
 scene.fog = new THREE.FogExp2(0xffffff, 0.0001);
-const baseFov = () => 70 + Math.max(0, 1 - innerWidth / innerHeight) * 26;
-const camera = new THREE.PerspectiveCamera(baseFov(), innerWidth / innerHeight, 0.15, 24000);
+// A page opened in a hidden tab can start with no size at all
+const aspect = () => Math.max(1, innerWidth) / Math.max(1, innerHeight);
+const baseFov = () => 70 + Math.max(0, 1 - aspect()) * 26;
+const camera = new THREE.PerspectiveCamera(baseFov(), aspect(), 0.15, 24000);
 camera.rotation.order = "YXZ";
 scene.add(camera);
 
@@ -87,9 +95,17 @@ scene.add(createBulbs(world.bulbs).mesh);
 const flora = createFlora(scene, world.plants);
 const grass = createGrass();
 scene.add(...grass.meshes);
+const clutter = createClutter();
+scene.add(clutter.mesh);
 water.setObstacles(world.foam);
 const gulls = createGulls();
 scene.add(gulls.mesh);
+// Splashes, sand, dust and sparks
+const spray = createSpray();
+scene.add(spray.group);
+// Smoke from the chimneys
+const smoke = createSmoke(world.chimneys);
+scene.add(smoke.mesh);
 const butterflies = createButterflies();
 scene.add(butterflies.mesh);
 const motes = createMotes(touch ? 350 : 700);
@@ -112,6 +128,33 @@ scene.add(cats.group);
 const sound = createSound();
 const dolphins = createDolphins();
 scene.add(dolphins.mesh);
+// Gulls standing about on the pier posts, the beached boat and the kiosk roof
+const perchers = (() => {
+  const { along, deck } = places.pier, spots = [];
+  for (const [o, side] of [[12.4, 1.4], [19.2, -1.4], [26, 1.4], [32.8, 1.4], [39.6, -1.4], [46.4, 1.4]]) {
+    const [x, z] = along(o, side);
+    spots.push([x, deck + 0.42, z]);
+  }
+  spots.push([places.beachBoat[0] + 0.3, places.beachBoat[1] + 0.05, places.beachBoat[2] - 0.6]);
+  spots.push([places.kiosk[0], places.kiosk[1] + 3.1, places.kiosk[2]]);
+  return createPerchers(spots);
+})();
+scene.add(perchers.mesh);
+// Shoals in the shallows, and crabs on the sand
+const findSpots = (n, seeds, test, spread = 14) => {
+  const out = [], rr = rng(31);
+  for (const [sx, sz] of seeds) {
+    for (let k = 0; k < 60 && out.length < n; k++) {
+      const x = sx + (rr() - 0.5) * spread * 2, z = sz + (rr() - 0.5) * spread * 2;
+      if (test(x, z, heightAt(x, z)) && out.every(([ox, oz]) => Math.hypot(ox - x, oz - z) > 6)) { out.push([x, z]); break; }
+    }
+  }
+  return out;
+};
+const shoals = createShoals(findSpots(4, [[112, -78], [98, -98], [126, -40], [104, -58]], (x, z, h) => h < -0.9 && h > -2.2));
+scene.add(shoals.mesh);
+const crabs = createCrabs(findSpots(7, [[120, -82], [126, -66], [131, -48], [135, -30], [138, -10], [96, -110], [110, -92]], (x, z, h) => h > 0.35 && h < 1.1 && field(x, z).beach > 0.6, 8));
+scene.add(crabs.mesh);
 // Fireworks go up from a raft in the middle of the cove
 const fireworks = createFireworks();
 scene.add(fireworks.group);
@@ -132,13 +175,25 @@ let showNight = -1;
   scene.add(raft);
   SHOW.raft = raft;
 }
+// Where a sound comes from: how far, and how far to the left or right
+const placeSound = (x, z) => {
+  const dx = x - camera.position.x, dz = z - camera.position.z, d = Math.hypot(dx, dz) || 1;
+  return [d, (dx * Math.cos(P.yaw) - dz * Math.sin(P.yaw)) / d];
+};
 const fireworkEvents = {
   launch: (p) => sound.launch(camera.position.distanceTo(tmpV.set(...p))),
   boom: (p, crackle) => sound.boom(camera.position.distanceTo(tmpV.set(...p)), crackle),
 };
 const dolphinEvents = {
-  splash: (x, z, s) => { ripples.add(x, z, s, 0.5, 1.6); ripples.add(x, z, s * 0.5, 0.4, 1.1); },
-  call: (p) => sound.dolphin(camera.position.distanceTo(p)),
+  splash: (x, z, s) => { ripples.add(x, z, s, 0.5, 1.6); ripples.add(x, z, s * 0.5, 0.4, 1.1); spray.splash(x, 0, z, s * 0.8); },
+  call: (p) => sound.dolphin(...placeSound(p.x, p.z)),
+};
+const percherEvents = {
+  lift: (p, n) => sound.flutter(...placeSound(p.x, p.z), n),
+};
+const crabEvents = {
+  scuttle: (p) => sound.scuttle(...placeSound(p.x, p.z)),
+  plop: (p) => { ripples.add(p.x, p.z, 0.25, 0.35, 1); },
 };
 const tmpV = new THREE.Vector3();
 
@@ -238,14 +293,23 @@ bell.rotation.y = TW.rot;
   bell.add(yoke);
 }
 scene.add(bell);
-// The bell strikes again each time it swings back, softer each time.
-let bellSwing = 0, bellT = 9, strikes = [];
+// The bell strikes again each time it swings back, softer each time. On
+// the hour it tolls the hour, slow and even.
+let bellSwing = 0, bellT = 9, swingT = 9, strikes = [];
+const bellSound = (volume) => sound.bell(camera.position.distanceTo(bell.position), volume, placeSound(bell.position.x, bell.position.z)[1]);
 const ringBell = () => {
   bellSwing = 0.55;
   bellT = 0;
-  strikes = [0.98, 1.96, 2.94];
-  sound.bell(camera.position.distanceTo(bell.position));
+  swingT = 0;
+  strikes = [[0.98, 0.42], [1.96, 0.56], [2.94, 0.75]].map(([at, v]) => ({ at, v }));
+  bellSound(1);
   gulls.startle();
+  perchers.startle();
+};
+const tollHour = (n) => {
+  bellSwing = 0.32;
+  bellT = 0;
+  strikes = Array.from({ length: n }, (_, i) => ({ at: i * 2.3 + 0.05, v: 0.7, swing: true }));
 };
 const clock = new THREE.Group();
 clock.position.set(...TW.clock);
@@ -371,7 +435,7 @@ const lanterns = projects.map((p, i) => {
   group.traverse((o) => o.layers.enable(1));
   scene.add(group);
   const lit = litKeys.has(p.key);
-  return { p, i, group, hang, mat, glow, light, lit, home: group.position.clone(), lightT: lit ? 9 : 0, rise: null };
+  return { p, i, group, hang, mat, glow, light, lit, home: group.position.clone(), lightT: lit ? 9 : 0, rise: null, kick: 0 };
 });
 const lanternWorld = (l) => l.hang.getWorldPosition(new THREE.Vector3()).add(new THREE.Vector3(0, -0.5, 0));
 
@@ -485,7 +549,8 @@ const P = {
   yaw: 1.12, pitch: -0.06,
   grounded: true, swimming: false, gliding: false, on: null,
   stride: 0, lastStep: 0, dip: 0, airTime: 0, fov: camera.fov,
-  boat: null, swing: false, scope: false, balloon: false,
+  boat: null, swing: false, scope: false, balloon: false, bench: false,
+  fovKick: 0,
 };
 const keys = new Set();
 let jumpQueued = false;
@@ -519,7 +584,7 @@ function movePlayer(dt) {
   if (P.boat) return rowBoat(dt);
   if (P.swing) return swingAbout(dt);
   if (P.balloon) return flyBalloon(dt);
-  if (P.scope) return;
+  if (P.scope || P.bench) return;
   const fx = -Math.sin(P.yaw), fz = -Math.cos(P.yaw), rx = Math.cos(P.yaw), rz = -Math.sin(P.yaw);
   const [ix, iz] = input();
   const run = keys.has("ShiftLeft") || keys.has("ShiftRight") || Math.hypot(stick.x, stick.y) > 0.92;
@@ -542,8 +607,9 @@ function movePlayer(dt) {
       // the diving board throws you higher
       P.vel.y = P.on?.bouncy ? 12.5 : 7.6;
       if (P.on?.bouncy) { sound.boing(0); board.k = 1; }
+      else { sound.hup(); spray.kick(P.pos.x, P.pos.y, P.pos.z, surfaceAt(P.pos.x, P.pos.z, P.on), 0.5); }
       P.grounded = false; P.airTime = 0;
-    } else if (P.swimming) { P.vel.y = 6; P.swimming = false; P.airTime = 0; }
+    } else if (P.swimming) { P.vel.y = 6; P.swimming = false; P.airTime = 0; spray.splash(P.pos.x, 0, P.pos.z, 0.5); }
     jumpQueued = false;
   }
   const holding = keys.has("Space") || touchJump;
@@ -583,7 +649,9 @@ function movePlayer(dt) {
   P.on = g.on;
   if (!g.on && g.y < WATER_FEET && P.pos.y <= WATER_FEET + 0.02) {
     if (!P.swimming) {
-      splash(P.pos.x, P.pos.z, Math.min(1.6, 0.4 - P.vel.y * 0.08));
+      const k = Math.min(1.6, 0.4 - P.vel.y * 0.08);
+      splash(P.pos.x, P.pos.z, k);
+      spray.splash(P.pos.x, 0, P.pos.z, k);
       sound.splash(Math.min(1.4, 0.4 - P.vel.y * 0.1));
     }
     P.swimming = true;
@@ -603,9 +671,11 @@ function movePlayer(dt) {
         P.grounded = false;
         return;
       }
-      if (!P.grounded && P.vel.y < -8) {
-        P.dip = Math.min(0.35, -P.vel.y * 0.022);
-        sound.step(surfaceAt(P.pos.x, P.pos.z, g.on));
+      if (!P.grounded && P.vel.y < -4.5) {
+        const surf = surfaceAt(P.pos.x, P.pos.z, g.on), k = Math.min(1.5, (-P.vel.y - 3) / 8);
+        P.dip = calm ? 0 : Math.min(0.35, -P.vel.y * 0.022);
+        sound.land(surf, k);
+        spray.kick(P.pos.x, g.y, P.pos.z, surf, k);
       }
       P.pos.y = g.y;
       P.vel.y = 0;
@@ -616,6 +686,22 @@ function movePlayer(dt) {
     }
   }
 }
+// Back to the nearest footpath, from wherever you've got to
+function nearestPath(x, z) {
+  let best = null, bd = Infinity;
+  for (const p of PATHS) for (let i = 1; i < p.length; i++) {
+    const [ax, az] = p[i - 1], [bx, bz] = p[i], ex = bx - ax, ez = bz - az;
+    const k = Math.max(0, Math.min(1, ((x - ax) * ex + (z - az) * ez) / (ex * ex + ez * ez)));
+    const px = ax + ex * k, pz = az + ez * k, d = Math.hypot(x - px, z - pz);
+    if (d < bd) { bd = d; best = [px, pz, Math.atan2(-ex, -ez)]; }
+  }
+  return best;
+}
+const unstick = () => {
+  if (!free()) return;
+  const [x, z, yaw] = nearestPath(P.pos.x, P.pos.z);
+  teleport(x, groundAt(x, z).y, z, yaw, () => toast("Back on the path"));
+};
 // The painting ends somewhere
 function keepInside() {
   const fromMid = Math.hypot(P.pos.x + 40, P.pos.z + 40);
@@ -657,6 +743,7 @@ function rowBoat(dt) {
       sound.oar();
       for (const s of [-1, 1]) {
         ripples.add(b.x + Math.cos(b.heading) * s * 2.6, b.z - Math.sin(b.heading) * s * 2.6, 0.5, 0.4, 1.4);
+        spray.splash(b.x + Math.cos(b.heading) * s * 2.6, 0, b.z - Math.sin(b.heading) * s * 2.6, 0.12);
       }
     }
   }
@@ -795,33 +882,38 @@ const leaveBalloon = () => {
 
 function placeCamera(dt, t) {
   const speed = Math.hypot(P.vel.x, P.vel.z);
-  let eye = P.swimming ? WATER_FEET + 1.6 + Math.sin(t * 1.7) * 0.07 : P.pos.y + 1.62;
-  if (P.boat) eye = 0.35 + 0.95 + Math.sin(t * 1.1 + 1.3) * 0.06;
+  let eye = P.swimming ? WATER_FEET + 1.6 + Math.sin(t * 1.7) * (calm ? 0.02 : 0.07) : P.pos.y + 1.62;
+  if (P.boat) eye = 0.35 + 0.95 + Math.sin(t * 1.1 + 1.3) * (calm ? 0.015 : 0.06);
   if (P.swing) eye = P.pos.y + 1.0;
   if (P.balloon) eye = P.pos.y + 1.55;
+  if (P.bench) eye = P.pos.y + 0.84 + (calm ? 0 : Math.sin(t * 0.9) * 0.008);
   if (P.scope) {
     const tp = places.telescope;
     camera.position.set(tp.x, tp.y + 1.45, tp.z);
   } else {
-    if ((P.grounded || P.swimming) && speed > 0.5 && !P.boat && !P.balloon) {
+    if ((P.grounded || P.swimming) && speed > 0.5 && !P.boat && !P.balloon && !P.bench) {
       P.stride += speed * dt;
-      eye += Math.sin(P.stride * 2.1) * 0.045 * Math.min(1, speed / 5);
+      if (!calm) eye += Math.sin(P.stride * 2.1) * 0.045 * Math.min(1, speed / 5);
       const stepLen = P.swimming ? 2.4 : speed > 7 ? 2.2 : 1.5;
       if (P.stride - P.lastStep > stepLen) {
         P.lastStep = P.stride;
         const s = P.swimming ? "water" : surfaceAt(P.pos.x, P.pos.z, P.on);
         sound.step(s);
         if (s === "water") ripples.add(P.pos.x, P.pos.z, 0.7, 0.35, 1.4);
+        // running on the beach throws the sand up behind you
+        else if (s === "sand" && speed > 7) spray.kick(P.pos.x, P.pos.y, P.pos.z, "sand", 0.3);
       }
     }
     P.dip *= Math.exp(-dt * 7);
     eye -= P.dip;
     camera.position.set(P.pos.x, eye, P.pos.z);
   }
-  const roll = P.boat ? Math.sin(t * 0.9 + 1.3) * 0.025 : 0;
+  const roll = P.boat && !calm ? Math.sin(t * 0.9 + 1.3) * 0.025 : 0;
   camera.rotation.set(P.pitch, P.yaw, roll);
   // A tall screen gets a taller view, so it doesn't feel like a keyhole
-  const want = P.scope ? 13 : baseFov() + (speed > 7 && P.grounded ? 5 : 0) + (P.gliding ? 7 : 0) + (P.swing ? Math.abs(swing.om) * 3 : 0);
+  P.fovKick *= Math.exp(-dt * 2.5);
+  const lively = calm ? 0 : 1;
+  const want = P.scope ? 13 : baseFov() + lively * ((speed > 7 && P.grounded ? 5 : 0) + (P.gliding ? 7 : 0) + (P.swing ? Math.abs(swing.om) * 3 : 0) + P.fovKick) - (P.bench ? 4 : 0);
   P.fov += (want - P.fov) * Math.min(1, dt * (P.scope ? 6 : 4));
   if (Math.abs(camera.fov - P.fov) > 0.01) { camera.fov = P.fov; camera.updateProjectionMatrix(); }
   parasolOpen += ((P.gliding ? 1 : 0) - parasolOpen) * Math.min(1, dt * 8);
@@ -911,7 +1003,9 @@ function paintMapBase() {
   const sea = [[0.6, [148, 220, 206]], [2.5, [104, 196, 200]], [8, [86, 160, 205]], [20, [70, 120, 190]], [99, [58, 96, 168]]];
   const H = new Float32Array(N * N);
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
-    H[j * N + i] = heightAt(MAP.cx - MAP.half + (i + 0.5) / N * 2 * MAP.half, MAP.cz - MAP.half + (j + 0.5) / N * 2 * MAP.half);
+    const x = MAP.cx - MAP.half + (i + 0.5) / N * 2 * MAP.half, z = MAP.cz - MAP.half + (j + 0.5) / N * 2 * MAP.half;
+    // a hollow inland is ground, however low
+    H[j * N + i] = seaAt(x, z) ? heightAt(x, z) : Math.max(heightAt(x, z), 0.5);
   }
   for (let j = 0; j < N; j++) for (let i = 0; i < N; i++) {
     const h = H[j * N + i], k = (j * N + i) * 4;
@@ -957,10 +1051,10 @@ function paintMapBase() {
   label("the church", TW.x, TW.z, 12, -12);
   label("the village", 210, 40, -10, 0);
   label("the pier", places.pier.end[0], places.pier.end[2], -40, 28);
-  label("the lookout & swing", -20, -290, 14, 6);
+  label("the lookout, swing & bench", -20, -290, 14, 6);
   label("the quarry", 96, -322, 14, 6);
   label("the islet", ISLANDS[0][0], ISLANDS[0][1], -30, 44);
-  label("the windmill", places.windmill[0], places.windmill[2], 14, 6);
+  label("the windmill", places.windmill[0], places.windmill[2], 14, 30);
   label("the chapel", places.chapel[0], places.chapel[2], 14, 6);
   label("a boat", rowboat.x, rowboat.z, -22, 30);
   g.font = "italic 40px Newsreader, Georgia, serif";
@@ -968,7 +1062,24 @@ function paintMapBase() {
   label("the cove", -30, -40, -60, 10);
   g.font = "500 15px 'IBM Plex Mono', monospace";
   g.fillStyle = "#5c5b57";
-  g.fillText("THE BAY · TAB TO CLOSE", 26, 40);
+  g.fillText(touch ? "THE BAY · MAP TO CLOSE" : "THE BAY · TAB TO CLOSE", 26, 40);
+  // the key
+  const ky = 852;
+  g.fillStyle = "rgba(244, 240, 228, 0.85)";
+  g.fillRect(22, ky - 28, 470, 40);
+  g.lineWidth = 2;
+  g.strokeStyle = "#7a4a1f";
+  for (const [x, lit] of [[40, true], [150, false]]) {
+    g.beginPath(); g.arc(x, ky - 8, 7, 0, Math.PI * 2);
+    g.fillStyle = lit ? "#f2a93b" : "rgba(244, 240, 228, 0.9)"; g.fill(); g.stroke();
+  }
+  g.fillStyle = "#c8372d";
+  g.beginPath(); g.moveTo(290, ky - 18); g.lineTo(297, ky + 2); g.lineTo(290, ky - 3); g.lineTo(283, ky + 2); g.closePath(); g.fill();
+  g.fillStyle = "#5c5b57";
+  g.fillText("LIT", 54, ky - 3);
+  g.fillText("STILL DARK", 164, ky - 3);
+  g.fillText("YOU", 306, ky - 3);
+  g.fillText("- - PATHS", 374, ky - 3);
   g.strokeStyle = "rgba(60, 50, 40, 0.6)";
   g.lineWidth = 3;
   g.strokeRect(14, 14, 872, 872);
@@ -1160,10 +1271,15 @@ const skySpot = (i) => {
 const lightLantern = (l) => {
   l.lit = true;
   l.lightT = 0;
+  l.kick = 1;
   litKeys.add(l.p.key);
   saveLit();
+  const at = lanternWorld(l);
+  spray.embers(at.x, at.y, at.z, 30);
+  if (!calm) P.fovKick = -4;
   sound.flame();
   sound.chime(l.i);
+  setTimeout(() => sound.chime(l.i + 2), 260);
   const n = tally();
   const { p } = l;
   const foot = `<a href="${p.href}" target="_blank" rel="noopener" style="color:inherit">${p.href.replace("https://", "")}</a> · <kbd>O</kbd> opens it`;
@@ -1199,7 +1315,105 @@ $("reset").addEventListener("click", () => {
   location.reload();
 });
 
-const free = () => !P.boat && !P.swing && !P.scope && !P.balloon;
+const free = () => !P.boat && !P.swing && !P.scope && !P.balloon && !P.bench;
+
+// The bench at the lookout: sit, and the day goes by faster while you do.
+const sitOnBench = () => {
+  const b = places.bench;
+  P.bench = true;
+  P.pos.set(b.x, b.y, b.z);
+  P.vel.set(0, 0, 0);
+  P.yaw = b.yaw;
+  P.pitch = 0.02;
+  glide = null;
+  toast("You sit, and the day slips by. E to get up.", 5000);
+};
+const leaveBench = () => {
+  const b = places.bench;
+  P.bench = false;
+  const x = b.x - Math.sin(b.yaw) * 1.1, z = b.z - Math.cos(b.yaw) * 1.1;
+  P.pos.set(x, groundAt(x, z).y, z);
+  P.grounded = true;
+  skew = wrap(skew);
+  toast("N brings the sky back to now");
+};
+
+// A coin for the fountain
+const WISHES = ["Plink. A wish, for whoever finds the bay next.", "It settles on the others, a little gold among the green.", "Heads. That's a good sign, the café owner would say.",
+  "Down it goes. Wishes made here are said to come true slowly.", "It spins once and is gone. Someone else's coin glints back."];
+let wishes = 0, coin = null;
+const coinMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.05, 0.05, 0.008, 12), toonish("#e3b34a", { defines: { RIM: "0.6", WRAP: "0.1" } }));
+coinMesh.visible = false;
+scene.add(coinMesh);
+const tossCoin = () => {
+  if (coin) return;
+  const [fx, fy, fz] = places.fountain;
+  const ang = Math.random() * Math.PI * 2, d = 0.8 + Math.random() * 1.2;
+  camera.getWorldDirection(fwd);
+  coin = { t: 0, from: camera.position.clone().addScaledVector(fwd, 0.4).add(new THREE.Vector3(0, -0.2, 0)), to: new THREE.Vector3(fx + Math.cos(ang) * d, fy - 1.85, fz + Math.sin(ang) * d) };
+  coinMesh.visible = true;
+  sound.coin(camera.position.distanceTo(coin.to));
+};
+
+// The white chapel's bell, smaller and higher than the church's
+let chapelStrikes = [];
+const ringChapel = () => {
+  const [x, , z] = places.chapelBell;
+  chapelStrikes = [0, 0.62, 1.24, 2.1].map((at, i) => ({ at: performance.now() / 1000 + at, v: [1, 0.8, 0.9, 0.55][i] }));
+  gulls.startle();
+  toast(["A thin, bright note over the terraces.", "Ding, ding. The lavender doesn't mind."][Math.floor(Math.random() * 2)]);
+  return [x, z];
+};
+
+// A message in a bottle, washed up at the far end of the beach. Every one
+// says something different about the bay.
+const NOTES = [
+  "Whoever finds this: the bench at the lookout is the best seat in the bay. Sit a while and let the day go by.",
+  "The fountain in the square takes coins. Nobody knows who keeps them.",
+  "A flat stone thrown hard at the church bell will ring it.",
+  "There's a bell at the white chapel too, smaller and higher, over the lavender.",
+  "Jump, and hold Space as you fall: the parasol will carry you down.",
+  "The dolphins come past most evenings, out beyond the pier.",
+  "Press T and watch a whole day go round in under half a minute.",
+  "The gulls on the pier posts don't like company. Walk up slowly anyway.",
+];
+let notesRead = Number(stored("world-notes", "0")) || 0;
+const bottle = (() => {
+  let spot = null;
+  for (let x = 74; x <= 104 && !spot; x += 1.5) for (let z = -124; z <= -96 && !spot; z += 1.5) {
+    const h = heightAt(x, z);
+    if (h > 0.3 && h < 0.55 && field(x, z).beach > 0.7) spot = [x, h, z];
+  }
+  const [x, y, z] = spot || [88, 0.5, -110];
+  const g = new THREE.Group();
+  const glass = toonish("#5f9c78", { defines: { RIM: "0.9", WRAP: "0.2" } });
+  const body = new THREE.Mesh(new THREE.CylinderGeometry(0.075, 0.075, 0.26, 10), glass);
+  const neck = new THREE.Mesh(new THREE.CylinderGeometry(0.03, 0.06, 0.12, 10), glass);
+  neck.position.y = 0.19;
+  const cork = new THREE.Mesh(new THREE.CylinderGeometry(0.028, 0.028, 0.05, 8), toonish("#b38a5a"));
+  cork.position.y = 0.27;
+  const paper = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.04, 0.18, 8), toonish("#efe6cf"));
+  g.add(body, neck, cork, paper);
+  g.traverse((o) => { o.castShadow = true; });
+  g.position.set(x, y + 0.06, z);
+  g.rotation.set(Math.PI / 2 - 0.15, 0.6, 0.1, "YXZ");
+  scene.add(g);
+  const glint = sprite(new THREE.Color(1.6, 1.7, 1.5), 0.6);
+  glint.position.set(x, y + 0.2, z);
+  scene.add(glint);
+  return { g, glint, x, y, z, taken: false };
+})();
+const readBottle = () => {
+  bottle.taken = true;
+  bottle.g.visible = bottle.glint.visible = false;
+  const note = NOTES[notesRead % NOTES.length];
+  notesRead++;
+  store("world-notes", String(notesRead));
+  sound.clack(0);
+  showCard("a message in a bottle", "Found on the beach", note, `${notesRead} of ${NOTES.length} read · another will wash up`, null, 14000);
+  // the tide brings another
+  setTimeout(() => { bottle.taken = false; bottle.g.visible = bottle.glint.visible = true; }, 90000);
+};
 const actions = [];
 for (const l of lanterns) {
   actions.push({ at: () => lanternWorld(l), r: 4.4, when: () => !l.lit && !l.rise && free(), label: "light the lantern", act: () => lightLantern(l) });
@@ -1232,6 +1446,14 @@ for (const l of lanterns) {
       sound.flame();
       toast(L.night > 0.5 ? "Look up, over the cove" : "They'd show better after dark, but here they go", 3500);
     } });
+  const bn = places.bench;
+  actions.push({ at: () => new THREE.Vector3(bn.x, bn.y + 0.4, bn.z), r: 2.4, when: free, label: "sit on the bench and watch the day go by", act: sitOnBench });
+  const [fx, fy, fz] = places.fountain;
+  actions.push({ at: () => new THREE.Vector3(fx, fy - 1.6, fz), r: 3.6, when: () => free() && !coin, label: "toss a coin in the fountain",
+    act: () => { tossCoin(); toast(WISHES[wishes++ % WISHES.length], 3800); } });
+  const cb = places.chapelBell;
+  actions.push({ at: () => new THREE.Vector3(cb[0], cb[1], cb[2]), r: 6.5, when: () => free() && !chapelStrikes.length, label: "ring the chapel bell", act: ringChapel });
+  actions.push({ at: () => new THREE.Vector3(bottle.x, bottle.y + 0.2, bottle.z), r: 2.6, when: () => free() && !bottle.taken, label: "open the bottle", act: readBottle });
   const tp = places.telescope;
   actions.push({ at: () => new THREE.Vector3(tp.x, tp.y + 1.2, tp.z), r: 2.4, when: free, label: "look through the telescope",
     act: () => { P.scope = true; P.yaw = tp.yaw; P.pitch = -0.02; toast("Mouse to look, E to step back", 3500); } });
@@ -1255,7 +1477,8 @@ const findAction = () => {
   else if (P.swing) hint = "step off the swing";
   else if (P.scope) hint = "step back";
   else if (P.balloon) hint = BAL.y - Math.max(groundAt(BAL.x, BAL.z, BAL.y + 0.5).y, 0.15) < 1.2 ? "step out of the basket" : null;
-  if (hint || P.boat || P.swing || P.scope || P.balloon) {
+  else if (P.bench) hint = "get up";
+  if (hint || P.boat || P.swing || P.scope || P.balloon || P.bench) {
     focused = null;
     const text = hint ? `<kbd>${touch ? "tap" : "E"}</kbd>${hint}` : "";
     if (text !== lastHint) { lastHint = text; promptEl.innerHTML = text; promptEl.hidden = !text; }
@@ -1286,6 +1509,7 @@ const act = () => {
   if (P.swing) { leaveSwing(); return; }
   if (P.scope) { P.scope = false; return; }
   if (P.balloon) { leaveBalloon(); return; }
+  if (P.bench) { leaveBench(); return; }
   if (!focused) return;
   const a = focused;
   focused = null;
@@ -1302,8 +1526,8 @@ function splash(x, z, size = 1) {
 let best = 0;
 try { best = Number(localStorage.getItem("world-skips")) || 0; } catch { /* storage is optional */ }
 const stoneEvents = {
-  skip: (x, z, n) => { ripples.add(x, z, 0.5, 0.5, 1.5); sound.plip(n); },
-  sink: (x, z, n) => { splash(x, z, 0.5); sound.splash(0.35, camera.position.distanceTo(new THREE.Vector3(x, 0, z))); skipped(n); },
+  skip: (x, z, n) => { ripples.add(x, z, 0.5, 0.5, 1.5); spray.splash(x, 0, z, 0.18); sound.plip(n); },
+  sink: (x, z, n) => { splash(x, z, 0.5); spray.splash(x, 0, z, 0.35); sound.splash(0.35, ...placeSound(x, z)); skipped(n); },
   land: (x, z, n) => { sound.clack(camera.position.distanceTo(new THREE.Vector3(x, 0, z))); skipped(n); },
 };
 function skipped(n) {
@@ -1317,10 +1541,10 @@ function skipped(n) {
   }
 }
 const ballEvents = {
-  splash: (x, z, s) => splash(x, z, s),
+  splash: (x, z, s) => { splash(x, z, s); spray.splash(x, 0, z, s * 0.6); },
   bounce: (p, v) => sound.boing(camera.position.distanceTo(p) * (2 - Math.min(1, v / 6))),
 };
-const fishEvents = { splash: (x, z, s) => { splash(x, z, s); sound.splash(0.25, Math.hypot(x - P.pos.x, z - P.pos.z)); } };
+const fishEvents = { splash: (x, z, s) => { splash(x, z, s); spray.splash(x, 0, z, s * 0.5); sound.splash(0.25, ...placeSound(x, z)); } };
 let lastThrow = 0;
 const throwStone = () => {
   const now = performance.now();
@@ -1372,15 +1596,37 @@ const begin = () => {
 const pause = () => {
   playing = false;
   keys.clear();
+  touchJump = false;
   goBtn.textContent = "Keep walking";
   intro.classList.remove("out");
   canvas.style.cursor = "";
   setMap(false);
+  $("unstick").hidden = !started;
+  // so Enter (or Space) carries straight on
+  goBtn.focus({ preventScroll: true });
 };
 document.addEventListener("pointerlockchange", () => {
   if (locked()) { dragLook = false; begin(); } else if (!dragLook && !postcardOpen) pause();
 });
 goBtn.addEventListener("click", enter);
+$("unstick").addEventListener("click", () => { enter(); unstick(); });
+
+// Settings, kept between visits
+const setSound = $("set-sound"), setCalm = $("set-calm"), setDetail = $("set-detail");
+let detail = stored("world-detail", "auto");
+const showSettings = () => {
+  setSound.setAttribute("aria-pressed", String(!sound.muted));
+  setSound.textContent = sound.muted ? "Sound off" : "Sound on";
+  setCalm.setAttribute("aria-pressed", String(calm));
+  setDetail.value = detail;
+};
+setSound.addEventListener("click", () => { sound.start(); sound.toggle(); showSettings(); });
+setCalm.addEventListener("click", () => { calm = !calm; store("world-calm", calm ? "1" : "0"); showSettings(); });
+setDetail.addEventListener("change", () => {
+  detail = setDetail.value;
+  store("world-detail", detail);
+  setQuality(detail === "auto" ? (touch ? 1 : 3) : Number(detail));
+});
 canvas.addEventListener("click", () => { if (!playing && !touch && started) enter(); });
 
 let drag = null;
@@ -1426,7 +1672,9 @@ document.addEventListener("keydown", (e) => {
   if (e.code === "KeyE" || e.code === "Enter") act();
   else if (e.code === "KeyN") { skyHome(); toast("Back to now in Surat"); }
   else if (e.code === "KeyT") { skew = wrap(skew); glideTo(skew + 1440, 24000, () => { skew = wrap(skew); }); toast("A whole day, in twenty-four seconds"); }
-  else if (e.code === "KeyM") toast(sound.toggle() ? "Sound off" : "Sound on");
+  else if (e.code === "KeyM") { toast(sound.toggle() ? "Sound off" : "Sound on"); showSettings(); }
+  else if (e.code === "KeyR") unstick();
+  else if (e.key === "?" || e.code === "F1") { e.preventDefault(); hintsEl.classList.remove("off"); hintsT = 12; }
   else if (e.code === "KeyH") document.documentElement.classList.toggle("is-bare");
   else if (e.code === "KeyP") openPostcard();
   else if (e.code === "KeyO" && cardLink) window.open(cardLink, "_blank", "noopener");
@@ -1478,13 +1726,14 @@ if (touch) {
   $("t-hours").addEventListener("click", () => { glide = null; skew += 60; });
   $("t-map").addEventListener("click", () => setMap(!mapOpen));
   $("t-card").addEventListener("click", openPostcard);
+  $("t-menu").addEventListener("click", pause);
   promptEl.addEventListener("click", act);
 }
 
 const onResize = () => {
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, 1.5));
   renderer.setSize(innerWidth, innerHeight);
-  camera.aspect = innerWidth / innerHeight;
+  camera.aspect = aspect();
   camera.updateProjectionMatrix();
   post.resize();
 };
@@ -1492,19 +1741,34 @@ window.addEventListener("resize", onResize);
 
 // ------------------------------------------------------------------ the frame
 const clockEl = $("clock");
+const hintsEl = $("hints");
+let hintsT = 25;
 let L = lightOf(Date.now());
 let t = 0, last = performance.now(), hudTick = 0, slow = 0, fast = 0;
 let quality = 3; // 3 best … 0 lightest
+let devShot = null;
+let lastHour = null, lastTime = 0, ambientT = 8;
+const ambient = new THREE.Color(), tmpCol = new THREE.Color(), fieldHere = {};
+const mothLamps = [...world.lamps];
 const tmp = new THREE.Vector3(), center = new THREE.Vector3(), right = new THREE.Vector3(), upv = new THREE.Vector3(), sunWorld = new THREE.Vector3();
 const skyTint = new THREE.Color();
 const setQuality = (q) => {
   quality = Math.max(0, Math.min(3, q));
+  // a smaller shadow map on the lighter settings
+  const size = [1024, 2048, 2048, SHADOW_MAP][quality];
+  if (sunLight.shadow.mapSize.x !== size) {
+    sunLight.shadow.mapSize.set(size, size);
+    sunLight.shadow.map?.dispose();
+    sunLight.shadow.map = null;
+  }
   grass.density = [0.45, 0.65, 0.85, 1][quality];
+  clutter.density = [0.35, 0.6, 0.85, 1][quality];
   post.scale = [0.62, 0.75, 0.88, 1][quality];
   flora.reach = [0.45, 0.6, 0.8, 1][quality];
   U.uLodScale.value = [0.55, 0.7, 0.85, 1][quality];
 };
-setQuality(touch ? 1 : 3);
+setQuality(detail === "auto" ? (touch ? 1 : 3) : Number(detail));
+showSettings();
 
 function frame(now) {
   const dt = Math.min(0.05, (now - last) / 1000);
@@ -1540,14 +1804,20 @@ function frame(now) {
   U.uNight.value = night;
   U.uFogColor.value.copy(palette.fog);
   U.uFogGlow.value.copy(palette.fog).lerp(palette.glow, L.sunUp * 0.85);
-  U.uFogDensity.value = 0.00013 * (1 + 0.5 * L.gold);
+  // early mornings lay a mist on the water; evenings are clearer
+  const mist = L.gold * (L.rising ? 1 : 0.3) + night * 0.12;
+  U.uFogDensity.value = 0.00013 * (1 + 0.5 * L.gold + 1.3 * mist);
+  U.uFogFalloff.value = 0.0032 * (1 + 0.9 * mist);
   U.uPlayer.value.copy(P.pos);
   U.uGust.value = 0.75 + 0.35 * Math.sin(t * 0.13) * Math.sin(t * 0.071 + 1);
+  // sitting on the bench, the day goes by: ten minutes a second
+  if (P.bench) skew += dt * 10;
   sunLight.color.copy(palette.light);
   sunLight.intensity = L.strength * 1.08;
   hemi.color.copy(palette.hemiSky);
   hemi.groundColor.copy(palette.hemiGround);
-  hemi.intensity = THREE.MathUtils.lerp(0.72, 0.34, night) * (1 - 0.15 * L.gold);
+  // the blue hour is lit almost entirely by the sky
+  hemi.intensity = THREE.MathUtils.lerp(0.72, 0.34, night) * (1 - 0.15 * L.gold) + 0.2 * L.blue;
 
   // The shadow map covers the ground ahead of you, stepped to its own
   // texels so the edges don't crawl as you walk.
@@ -1557,7 +1827,7 @@ function frame(now) {
   } else center.set(-60, 8, -50);
   right.crossVectors(new THREE.Vector3(0, 1, 0), L.lightDir).normalize();
   upv.crossVectors(L.lightDir, right);
-  const texel = (2 * SHADOW) / SHADOW_MAP;
+  const texel = (2 * SHADOW) / sunLight.shadow.mapSize.x;
   const cr = center.dot(right), cu = center.dot(upv);
   center.addScaledVector(right, Math.round(cr / texel) * texel - cr).addScaledVector(upv, Math.round(cu / texel) * texel - cu);
   sunLight.target.position.copy(center);
@@ -1568,15 +1838,19 @@ function frame(now) {
   su.uMoon.value.copy(L.moonDir);
   su.uPhase.value = L.phase;
   su.uMoonUp.value = L.moonUp;
+  su.uMist.value = mist * 0.75;
   sky.mesh.position.copy(camera.position);
   clouds.uniforms.uLight.value.copy(L.alt > -1.5 ? L.sunDir : L.moonDir);
-  clouds.uniforms.uBright.value = 1.25 + 0.2 * L.gold;
+  clouds.uniforms.uBright.value = (1.2 + 0.25 * L.gold) * (1 - 0.3 * night);
+  // the afterglow, lighting them from underneath once the sun is down
+  clouds.uniforms.uAfter.value = Math.exp(-(((L.alt + 2.5) / 3.4) ** 2)) * (L.rising ? 0.6 : 0.95);
   clouds.group.rotation.y += dt * 0.0012;
 
   const wu = water.uniforms;
   wu.uLight.value.copy(L.alt > -1.5 ? L.sunDir : L.moonDir);
   wu.uGlint.value = L.alt > -1.5 ? L.sunUp * (0.8 + 0.6 * L.gold) : L.moonUp * (0.2 + 0.6 * L.lit);
   wu.uGlintCol.value.copy(palette.light).multiplyScalar(L.alt > -1.5 ? 1 : 0.6);
+  wu.uSunK.value = smooth(-4, 18, L.alt);
   skyTint.copy(palette.horizon).lerp(palette.zenith, 0.4);
   windows.uniforms.uSky.value.copy(skyTint);
   windows.uniforms.uDay.value = 0.35 + 0.65 * (1 - night);
@@ -1611,9 +1885,13 @@ function frame(now) {
 
   // Moving things
   grass.update(camera.position);
+  clutter.update(camera.position);
   flora.update(camera.position);
   gulls.update(dt, t, night);
-  butterflies.update(dt, t, P.pos, 1 - night);
+  perchers.update(dt, t, P, night, percherEvents);
+  shoals.update(dt, t, P);
+  crabs.update(dt, t, P, crabEvents);
+  butterflies.update(dt, t, P.pos, 1 - night, mothLamps);
   cats.update(dt, t, P);
   fish.update(dt, P.pos, fishEvents);
   stones.update(dt, stoneEvents);
@@ -1626,6 +1904,11 @@ function frame(now) {
   dolphins.update(dt, camera.position, P.yaw, dolphinEvents);
   fireworks.uniforms.uScale.value = scale;
   fireworks.update(dt, fireworkEvents);
+  // what lights the dust and the smoke: the sky, and the sun on it
+  ambient.copy(palette.hemiSky).multiplyScalar(hemi.intensity * 0.9).add(tmpCol.copy(palette.light).multiplyScalar(sunLight.intensity * 0.55));
+  spray.update(dt, scale, ambient);
+  smoke.uniforms.uScale.value = scale;
+  smoke.uniforms.uLight.value.copy(ambient).multiplyScalar(1.1);
   for (const b of world.boats) {
     if (b.kind === "sail") {
       b.phase += dt * b.sp;
@@ -1666,12 +1949,37 @@ function frame(now) {
   }
   // The bell swings, and keeps time
   bellT += dt;
-  bell.rotation.x = bellSwing * Math.sin(bellT * 3.2) * Math.exp(-bellT * 0.45);
-  if (strikes.length && bellT >= strikes[0]) {
-    sound.bell(camera.position.distanceTo(bell.position), 0.75 ** (4 - strikes.length));
-    strikes.shift();
+  swingT += dt;
+  bell.rotation.x = bellSwing * Math.sin(swingT * 3.2) * Math.exp(-swingT * 0.45);
+  if (strikes.length && bellT >= strikes[0].at) {
+    const s = strikes.shift();
+    bellSound(s.v);
+    if (s.swing) swingT = 0;
   }
   const [h, m] = hoursAt(time);
+  // on the hour, if the hours are passing at their own pace
+  if (lastHour !== null && h !== lastHour && !glide && !P.bench && Math.abs(time - lastTime) < 12e4 && started) tollHour(h % 12 || 12);
+  lastHour = h;
+  lastTime = time;
+  // the chapel bell, rung by hand
+  while (chapelStrikes.length && performance.now() / 1000 >= chapelStrikes[0].at) {
+    const s = chapelStrikes.shift(), [cx, cy, cz] = places.chapelBell, [d, pan] = placeSound(cx, cz);
+    sound.bell(Math.hypot(d, cy - camera.position.y), s.v * 0.75, pan, 1.9);
+  }
+  // a coin, on its way into the fountain
+  if (coin) {
+    coin.t += dt / 0.55;
+    const k = Math.min(1, coin.t);
+    coinMesh.position.lerpVectors(coin.from, coin.to, k);
+    coinMesh.position.y += Math.sin(k * Math.PI) * 0.9;
+    coinMesh.rotation.set(t * 14, 0, t * 9);
+    if (k >= 1) { spray.splash(coin.to.x, coin.to.y, coin.to.z, 0.1); coinMesh.visible = false; coin = null; }
+  }
+  // the bottle catches the light now and then
+  if (!bottle.taken) bottle.glint.material.opacity = (0.15 + 0.85 * Math.max(0, Math.sin(t * 1.9) * Math.sin(t * 0.7 + 1)) ** 6) * (1 - 0.6 * night);
+  // smoke from the chimneys when the stoves are lit: breakfast, and supper
+  const hf = h + m / 60;
+  smoke.uniforms.uAmount.value = 0.12 + 0.88 * Math.max(Math.exp(-(((hf - 7.5) / 1.6) ** 2)), Math.exp(-(((hf - 19.5) / 2.2) ** 2)));
   // the bay's own show, at nine every evening
   if (h === 21 && m < 2 && showNight !== new Date(time + IST).getUTCDate() && started) {
     showNight = new Date(time + IST).getUTCDate();
@@ -1689,15 +1997,21 @@ function frame(now) {
   // Lanterns: bob in the wind, glow once lit, rise at the end
   for (const l of lanterns) {
     l.lightT += dt;
-    l.hang.rotation.z = Math.sin(t * 1.3 + l.i) * 0.06;
+    l.kick *= Math.exp(-dt * 1.4);
+    l.hang.rotation.z = Math.sin(t * 1.3 + l.i) * 0.06 + Math.sin(l.lightT * 5.5) * 0.3 * l.kick;
     l.hang.rotation.x = Math.sin(t * 1.1 + l.i * 2) * 0.05;
     const on = l.lit ? smooth(0, 0.8, l.lightT) : 0;
     const flick = 0.85 + 0.15 * Math.sin(t * 9 + l.i * 3) * Math.sin(t * 5.3 + l.i);
-    l.mat.emissive.setRGB(1.6, 0.85, 0.3).multiplyScalar(on * (0.7 + 1.1 * night) * flick);
-    l.light.intensity = on * (0.6 + 2.5 * night) * flick;
-    l.glow.material.opacity = on ? on * (0.25 + 0.75 * night) * flick : (0.1 + 0.08 * Math.sin(t * 2 + l.i)) * (0.3 + 0.7 * night);
+    // a dark one breathes a little, pale in the moonlight, so it can be found
+    const breathe = 0.5 + 0.5 * Math.sin(t * 1.6 + l.i * 1.7);
+    if (on) l.mat.emissive.setRGB(1.6, 0.85, 0.3).multiplyScalar(on * (0.7 + 1.1 * night) * flick);
+    else l.mat.emissive.setRGB(0.16, 0.18, 0.24).multiplyScalar(night * (0.55 + 0.45 * breathe));
+    l.light.intensity = on * (0.6 + 2.5 * night) * flick + 3 * l.kick;
+    l.glow.material.opacity = on ? on * (0.25 + 0.75 * night) * flick : (0.08 + 0.12 * breathe) * (0.3 + 0.7 * night);
     l.glow.material.color.setRGB(...(on ? [3, 1.8, 0.8] : [1.6, 1.8, 2.4]));
-    l.glow.scale.setScalar(on ? 2.2 + 1.8 * night : 1.5);
+    // the halo shrinks as you come close, so a lantern at arm's length doesn't fill the view
+    const near = Math.min(1, Math.max(0.35, camera.position.distanceTo(l.group.position) / 9));
+    l.glow.scale.setScalar((on ? 2.2 + 1.8 * night : 1.5) * (1 + 0.6 * l.kick) * near);
     if (l.rise && finale) {
       const k = smooth(0, 1, (finale.t - l.rise.delay) / 28);
       l.group.position.lerpVectors(l.rise.from, l.rise.to, k);
@@ -1719,33 +2033,56 @@ function frame(now) {
       if (heightAt(P.pos.x + Math.cos(a) * 30, P.pos.z + Math.sin(a) * 30) < 0) wet++;
     }
     const high = smooth(15, 80, P.pos.y - Math.max(0, heightAt(P.pos.x, P.pos.z)));
+    const here = field(P.pos.x, P.pos.z, fieldHere);
+    const [fd, fpan] = placeSound(places.fountain[0], places.fountain[2]);
     sound.update(t, {
       shore: P.boat ? 0.7 : wet > 0 && wet < 8 ? 1 : wet === 8 ? 0.45 : 0.15,
       high, wind: P.gliding ? 1 : P.swing ? Math.min(1, Math.abs(swing.om) * 0.5) : P.balloon ? 0.25 * high : smooth(4, 12, Math.hypot(P.vel.x, P.vel.z)) * 0.3,
-      day: 1 - night, night, trees: field(P.pos.x, P.pos.z).village > 0.1 || P.pos.y > 20 ? 1 : 0.4,
+      day: 1 - night, night, trees: here.village > 0.1 || P.pos.y > 20 ? 1 : 0.4,
+      gust: U.uGust.value, fountain: 1 - smooth(3, 26, fd), fountainPan: fpan,
+      lap: here.beach * (1 - smooth(1.5, 7, Math.max(0, here.h))) * (wet > 0 && wet < 8 ? 1 : 0),
     });
+    // now and then a gull calls from overhead, or by night an owl from the trees
+    ambientT -= dt;
+    if (ambientT <= 0) {
+      ambientT = 5 + Math.random() * 10;
+      if (night < 0.55) {
+        const g = gulls.nearest(P.pos.x, P.pos.z);
+        if (g) { const [d, pan] = placeSound(g.p.x, g.p.z); sound.gull(Math.hypot(d, g.p.y - camera.position.y), pan); }
+      } else if (night > 0.8 && Math.random() < 0.45) sound.owl(25 + Math.random() * 40, Math.random() * 2 - 1);
+    }
   }
 
   // The HUD, a few times a second
   hudTick -= dt;
   if (hudTick <= 0 && playing) {
     hudTick = 0.25;
+    // the lamps the moths go to: street lamps, and the lanterns already lit
+    mothLamps.length = world.lamps.length;
+    for (const l of lanterns) if (l.lit && !l.rise) mothLamps.push(lanternWorld(l).toArray());
     const said = `${two(h)}:${two(m)} in Surat · sun ${L.alt < 0 ? "−" : ""}${Math.abs(Math.round(L.alt))}°`;
     clockEl.textContent = night > 0.4 ? `${said} · ${PHASES[Math.round(L.phase * 8) % 8]}` : said;
   }
   if (playing) drawCompass();
+  if (playing && hintsT > 0) { hintsT -= dt; if (hintsT <= 0) hintsEl.classList.add("off"); }
   if (mapOpen) drawMap();
 
   // Draw: what the water mirrors, then the bay, then the finish
   const pf = post.final.uniforms;
-  pf.uExposure.value = 0.92 + night * 0.8;
-  pf.uBloom.value = 0.45 + 0.55 * night;
+  pf.uExposure.value = 0.92 + night * 0.72;
+  pf.uBloom.value = 0.42 + 0.5 * night;
+  // the grade: shade cooler and light warmer at the ends of the day, colour
+  // a little richer in the golden hour, a little quieter by night
+  pf.uSat.value = 1.05 + 0.08 * L.gold * (1 - night) - 0.08 * night;
+  pf.uShadowTint.value.setRGB(0.95 + 0.02 * L.gold - 0.03 * night, 0.98 - 0.03 * L.gold * (1 - night), 1.06 + 0.04 * night + 0.02 * L.blue);
+  pf.uLightTint.value.setRGB(1.03 + 0.04 * L.gold * (1 - night), 1.0, 0.96 - 0.05 * L.gold * (1 - night) + 0.02 * L.blue);
   pf.uVignette.value = P.scope ? 1.6 : 0.32;
   post.rays = 0.32 * L.sunUp * (1 + 1.2 * L.gold) * (1 - night);
   sunWorld.copy(camera.position).addScaledVector(L.sunDir, 1000);
   if (quality > 0 || !touch) water.reflect(renderer, scene, camera, Math.max(1, Math.round(post.width * (quality > 1 ? 0.5 : 0.35))), Math.max(1, Math.round(post.height * (quality > 1 ? 0.5 : 0.35))));
   renderer.shadowMap.needsUpdate = true;
   post.render(scene, camera, sunWorld);
+  if (devShot) { const cb = devShot; devShot = null; cb(canvas.toDataURL("image/jpeg", 0.88)); }
   if (shotWanted) {
     // read the picture now, while it's still in the canvas, then a flash
     shotWanted = false;
@@ -1765,13 +2102,16 @@ function frame(now) {
   // Keep the frame rate: draw less when it struggles, more when it doesn't
   if (dt > 1 / 38) slow += dt; else slow = Math.max(0, slow - dt * 0.5);
   if (dt < 1 / 57) fast += dt; else fast = 0;
-  if (slow > 1.5 && quality > 0) { setQuality(quality - 1); slow = 0; }
-  if (fast > 8 && quality < 3) { setQuality(quality + 1); fast = 0; }
+  if (detail === "auto") {
+    if (slow > 1.5 && quality > 0) { setQuality(quality - 1); slow = 0; }
+    if (fast > 8 && quality < 3) { setQuality(quality + 1); fast = 0; }
+  }
 }
 renderer.setAnimationLoop(frame);
 
 goBtn.disabled = false;
 goBtn.textContent = "Walk in";
+window.__bayReady = true;
 
 // For looking around while working on the bay: ?dev puts a handle on window.
 if (new URLSearchParams(location.search).has("dev")) {
@@ -1784,5 +2124,18 @@ if (new URLSearchParams(location.search).has("dev")) {
     play() { started = true; begin(); },
     quality: (q) => setQuality(q),
     act, keys, map: () => setMap(!mapOpen),
+    // the next frame, as a JPEG data URL
+    shot: () => new Promise((res) => { devShot = res; }),
+    // draw n frames now, whether or not the page is being shown; returns the
+    // average milliseconds each took, GPU included
+    step(n = 1) {
+      const gl = renderer.getContext(), px = new Uint8Array(4);
+      const t0 = performance.now();
+      for (let i = 0; i < n; i++) {
+        frame(Math.max(performance.now(), last + 1));
+        gl.readPixels(0, 0, 1, 1, gl.RGBA, gl.UNSIGNED_BYTE, px);
+      }
+      return (performance.now() - t0) / n;
+    },
   };
 }
