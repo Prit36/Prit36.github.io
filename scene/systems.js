@@ -5,7 +5,9 @@
 //   water    moves only inside its matte, so rocks, sand and the headland
 //            never ripple; where it is drawn from a little past the shore,
 //            the sea carried on under the land (waterUnder) is what shows.
-//            Shore distance says where the sea meets land.
+//            How shallow it looks sets how it moves; the distance to the
+//            shore, in metres on the water, brings small waves in to the
+//            rocks and the beach and leaves foam where they break.
 //   sky      the same, behind the mountains, the bell tower and the
 //            cypresses (skyUnder); cloud density says where there is cloud.
 //   foliage  is lifted off (leaves, premultiplied) and moved over what was
@@ -13,13 +15,17 @@
 //            from the clean plate, not itself; flex says how freely each part
 //            moves and group which tree it belongs to.
 //
-// A system costs nothing until it has motion: its textures are not loaded
-// and its branch is not compiled into the shader. Birds and haze will draw
-// over the painting in their own passes, using the same mattes to pass
-// behind the cypresses and the hills.
+// A system costs nothing until it is switched on: its textures are not
+// loaded and its branch is not compiled into the shader. One that moves has
+// a Motion: stepped with the shared environment while the scene animates,
+// and asked for its uniforms each frame. Birds and haze will draw over the
+// painting in their own passes, using the same mattes to pass behind the
+// cypresses and the hills.
+
+import { Sea } from "./water.js";
 
 export const SYSTEMS = {
-  water: { define: "WATER", textures: ["mattes", "fields", "waterUnder"] },
+  water: { define: "WATER", textures: ["mattes", "fields", "waterUnder", "water"], Motion: Sea },
   sky: { define: "SKY", textures: ["mattes", "fields", "skyUnder"] },
   foliage: { define: "FOLIAGE", textures: ["mattes", "fields", "groups", "plate", "leaves"] },
 };

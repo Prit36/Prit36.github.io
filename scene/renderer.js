@@ -14,9 +14,11 @@ const CONTEXT = {
   powerPreference: "low-power",
 };
 
-const UNITS = { painting: 0, mattes: 1, fields: 2, groups: 3, plate: 4, leaves: 5, waterUnder: 6, skyUnder: 7 };
+const UNITS = { painting: 0, mattes: 1, fields: 2, groups: 3, plate: 4, leaves: 5, waterUnder: 6, skyUnder: 7, water: 8 };
+// WebGL's uniform type codes, to the call that sets each.
+const SETTERS = { 0x1406: "uniform1fv", 0x8b50: "uniform2fv", 0x8b51: "uniform3fv", 0x8b52: "uniform4fv" };
 const SAMPLERS = { painting: "uPainting", mattes: "uMattes", fields: "uFields", groups: "uGroups", plate: "uPlate", leaves: "uLeaves",
-  waterUnder: "uWaterUnder", skyUnder: "uSkyUnder" };
+  waterUnder: "uWaterUnder", skyUnder: "uSkyUnder", water: "uWater" };
 
 export class Renderer {
   static create(canvas) {
@@ -100,18 +102,20 @@ export class Renderer {
       const gl = this.gl;
       if (this.parallel && !gl.getProgramParameter(entry.program, this.parallel.COMPLETION_STATUS_KHR)) return null;
       if (!gl.getProgramParameter(entry.program, gl.LINK_STATUS)) {
-        const log = gl.getProgramInfoLog(entry.program) || gl.getShaderInfoLog(entry.fs);
+        const log = gl.getShaderInfoLog(entry.fs) || gl.getShaderInfoLog(entry.vs) || gl.getProgramInfoLog(entry.program);
         throw new Error(`Landscape shader failed: ${log}`);
       }
       entry.linked = true;
-      entry.uniforms = this.#locations(entry.program);
+      entry.uniforms = this.#locations(entry);
     }
     return entry;
   }
 
   // Draws one frame. `map` is Frame.deviceToUv; `probe` shifts each region
   // by a fixed number of painting pixels (zero outside the probe view).
-  draw(entry, { map, source, env, probe = [0, 0, 0] }) {
+  // `uniforms` are the moving systems' own, by name: numbers or arrays of
+  // them, laid out as the shader declares them.
+  draw(entry, { map, source, env, probe = [0, 0, 0], uniforms = {} }) {
     const gl = this.gl;
     const u = entry.uniforms;
     gl.viewport(0, 0, this.canvas.width, this.canvas.height);
@@ -129,6 +133,12 @@ export class Renderer {
     gl.uniform2f(u.uSource, source.width, source.height);
     if (u.uEnv) gl.uniform4fv(u.uEnv, env.writeUniforms(this.envData));
     if (u.uProbe) gl.uniform3fv(u.uProbe, probe);
+    for (const [name, value] of Object.entries(uniforms)) {
+      const loc = u[name];
+      if (!loc) continue;
+      const set = SETTERS[entry.types[name]];
+      if (set) gl[set](loc, typeof value === "number" ? [value] : value);
+    }
     gl.drawArrays(gl.TRIANGLES, 0, 3);
   }
 
@@ -172,14 +182,17 @@ export class Renderer {
     return { program, vs, fs, linked: false, uniforms: null };
   }
 
-  #locations(program) {
+  #locations(entry) {
     const gl = this.gl;
-    const out = {};
-    const n = gl.getProgramParameter(program, gl.ACTIVE_UNIFORMS);
+    const out = {}, types = {};
+    const n = gl.getProgramParameter(entry.program, gl.ACTIVE_UNIFORMS);
     for (let i = 0; i < n; i++) {
-      const name = gl.getActiveUniform(program, i).name.replace(/\[0\]$/, "");
-      out[name] = gl.getUniformLocation(program, name);
+      const info = gl.getActiveUniform(entry.program, i);
+      const name = info.name.replace(/\[0\]$/, "");
+      out[name] = gl.getUniformLocation(entry.program, name);
+      types[name] = info.type;
     }
+    entry.types = types;
     return out;
   }
 }

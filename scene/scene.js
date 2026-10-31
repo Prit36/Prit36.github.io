@@ -8,6 +8,10 @@
 // when the banner changes size or the picture changes. The animation loop
 // runs only while a system has motion, motion is allowed, the tab is
 // visible and the banner is on screen.
+//
+// Motion fades in over the first few seconds, so the canvas takes over from
+// the <img> without a jump and the painting only gradually comes alive.
+// With reduced motion it is the painting, exactly, and holds still.
 
 import { Renderer } from "./renderer.js";
 import { measureFrame } from "./frame.js";
@@ -24,14 +28,26 @@ const loadData = async (url) => {
 
 const nextFrame = () => new Promise((r) => requestAnimationFrame(r));
 
+// Seconds for motion to fade in.
+const FADE_IN = 3.5;
+
 export class LandscapeScene {
-  constructor(root, manifest, { systems = [], debugView = 0, probe = null } = {}) {
+  // still: switch the systems on but keep them at rest (for checking that
+  // a scene at rest is the painting).
+  constructor(root, manifest, { systems = [], debugView = 0, probe = null, still = false } = {}) {
     this.root = root;
     this.img = root.querySelector("img");
     this.manifest = manifest;
     this.environment = new Environment();
     this.systems = [];
     this.defines = [];
+    // The moving systems' Motions, by id.
+    this.motions = new Map();
+    this.still = still;
+    // How much of their motion is shown, 0 to 1, and how much the frame on
+    // screen shows.
+    this.presence = 0;
+    this.drawnMotion = 0;
     this.debugView = debugView;
     this.probe = probe;
     this.initialSystems = systems;
@@ -45,6 +61,13 @@ export class LandscapeScene {
     this.onScreen = true;
     this.reducedMotion = matchMedia("(prefers-reduced-motion: reduce)");
     this.cleanups = [];
+    // How the painting looks onto the sea, for every view that draws it.
+    const sea = manifest.sea;
+    this.layout = {
+      uSeaView: new Float32Array([sea.horizon, sea.centre, sea.focal, sea.eye]),
+      uSeaStretch: sea.stretch,
+      uShoreReach: sea.shoreReach,
+    };
   }
 
   // Resolves true once the canvas is showing the painting, false if it
@@ -68,6 +91,7 @@ export class LandscapeScene {
       this.#measure(this.root.clientWidth, this.root.clientHeight);
       this.#draw();
       this.#show(true);
+      this.#schedule();
       return true;
     } catch (err) {
       console.warn("Landscape stays a still image:", err);
@@ -93,6 +117,11 @@ export class LandscapeScene {
       await nextFrame();
       if (this.disposed) return;
     }
+    for (const id of [...this.motions.keys()]) if (!ids.includes(id)) this.motions.delete(id);
+    for (const id of ids) {
+      const { Motion } = SYSTEMS[id];
+      if (Motion && !this.motions.has(id)) this.motions.set(id, new Motion(this.environment.options.seed));
+    }
     this.systems = ids;
     this.defines = defines;
     this.invalidate();
@@ -111,6 +140,7 @@ export class LandscapeScene {
       live: this.live,
       systems: this.systems,
       animating: this.#animating(),
+      presence: +this.presence.toFixed(3),
       quality: this.quality?.tier,
       canvas: r ? [r.canvas.width, r.canvas.height] : null,
       textureMB: r ? +(r.textureBytes() / 1048576).toFixed(1) : 0,
@@ -131,7 +161,7 @@ export class LandscapeScene {
   }
 
   #animating() {
-    return this.live && this.systems.length > 0 && !this.reducedMotion.matches && this.visible && this.onScreen;
+    return this.live && this.motions.size > 0 && !this.still && !this.reducedMotion.matches && this.visible && this.onScreen;
   }
 
   #schedule() {
@@ -148,10 +178,16 @@ export class LandscapeScene {
         this.raf = requestAnimationFrame(this.#tick);
         return;
       }
-      this.environment.step(this.last ? (now - this.last) / 1000 : 0);
+      const dt = this.last ? Math.min((now - this.last) / 1000, 0.1) : 0;
+      this.environment.step(dt);
+      for (const m of this.motions.values()) m.step(dt, this.environment);
+      this.presence = Math.min(1, this.presence + dt / FADE_IN);
       this.last = now;
     } else {
       this.last = 0;
+      // Motion was just turned off: the last frame still shows it, so put
+      // the painting back, whether or not the media query's event comes.
+      if (this.drawnMotion > 0 && this.reducedMotion.matches) this.dirty = true;
     }
     if (animating || this.dirty) this.#draw();
     if (animating) this.raf = requestAnimationFrame(this.#tick);
@@ -162,11 +198,20 @@ export class LandscapeScene {
     const entry = this.renderer.program(this.defines, this.debugView);
     if (!entry || !this.frame) return;
     const [rx, ry] = this.ratio;
+    // Eased, so the fade-in neither starts nor ends with a jolt.
+    const p = this.still || this.reducedMotion.matches ? 0 : this.presence;
+    const motion = p * p * (3 - 2 * p);
+    this.drawnMotion = motion;
+    // The page's own day and night (main.js): no sun glints after dark.
+    const night = parseFloat(this.root.style.getPropertyValue("--night")) || 0;
+    const uniforms = { ...this.layout };
+    for (const m of this.motions.values()) Object.assign(uniforms, m.uniforms(motion, 1 - night));
     this.renderer.draw(entry, {
       map: this.frame.deviceToUv(rx, ry, this.canvas.height, window.devicePixelRatio || 1),
       source: this.manifest.source,
       env: this.environment,
       probe: this.probe || undefined,
+      uniforms,
     });
   }
 
@@ -264,7 +309,11 @@ export class LandscapeScene {
       this.last = 0;
       this.#schedule();
     });
-    on(this.reducedMotion, "change", () => this.invalidate());
+    on(this.reducedMotion, "change", () => {
+      // Back from reduced motion, the sea fades in again.
+      this.presence = 0;
+      this.invalidate();
+    });
 
     // srcset swaps in the larger picture when the window grows.
     on(this.img, "load", () => {
@@ -288,6 +337,7 @@ export class LandscapeScene {
         this.#measure(this.root.clientWidth, this.root.clientHeight);
         this.#draw();
         this.#show(true);
+        this.#schedule();
       } catch (err) {
         console.warn("Landscape stays a still image:", err);
       }
