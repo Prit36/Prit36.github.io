@@ -435,7 +435,7 @@
     #endif
     uniform sampler2D img, zones, clouds;
     uniform vec2 res, art;
-    uniform vec4 fit;
+    uniform vec4 fit, boat;
     uniform float dpr, time, night, horizon, wind;
 
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -463,6 +463,22 @@
     float cover(float d) { return clamp(d * 0.8 + 0.5, 0.0, 1.0); }
     vec4 over(vec4 c, vec3 rgb, float a) { return c * (1.0 - a) + vec4(rgb, 1.0) * a; }
 
+
+    // The boat, in painting pixels from the middle of its waterline. It runs
+    // before the wind, to the left, heeling a little on the swell.
+    vec4 boatShape(vec2 p) {
+      vec2 s = vec2(p.x + p.y * 0.035 * sin(time * 0.5), p.y);
+      float mast = cover(0.5 - abs(s.x - 0.5)) * cover(-3.0 - s.y) * cover(s.y + 26.0);
+      float sail = cover(s.x - 1.0) * cover(-5.0 - s.y) * cover((1.0 + (s.y + 25.0) * 0.45 - s.x) * 0.91);
+      float jib = cover(-s.x) * cover(-4.5 - s.y) * cover((s.x + (s.y + 23.0) * 0.432) * 0.918);
+      float hull = cover(p.y + 3.0) * cover(0.5 - p.y) * cover(9.0 - (p.y + 3.0) * 0.8 - abs(p.x));
+      vec4 c = vec4(0.0);
+      c = over(c, vec3(0.32, 0.28, 0.26), mast);
+      c = over(c, mix(vec3(0.99, 0.97, 0.92), vec3(0.86, 0.85, 0.84), smoothstep(-25.0, -5.0, s.y) * 0.5), sail);
+      c = over(c, vec3(0.88, 0.87, 0.85), jib);
+      c = over(c, p.y > -1.0 ? vec3(0.2, 0.24, 0.34) : vec3(0.96, 0.94, 0.9), hull);
+      return c;
+    }
 
     // A gull far off against the sky, a thin soft stroke the colour of the
     // sky behind it, only darker. It glides across on the breeze, rising and
@@ -574,6 +590,15 @@
       // The shadows of the clouds pass over the land and the water.
       float shade = smoothstep(0.52, 0.72, fbm(uv * vec2(3.0, 9.0) + vec2(time * 0.0041, 0.0)));
       col *= 1.0 - 0.1 * shade * (1.0 - zone.g) * (1.0 - zone.r) * (1.0 - night);
+
+      // The boat crosses the bay without disturbing the still water.
+      if (boat.w > 0.0) {
+        vec2 p = (px - boat.xy) / boat.z;
+        if (abs(p.x) < 170.0 && p.y > -30.0 && p.y < 1.0) {
+          vec4 c = boatShape(p) * boat.w;
+          col = col * (1.0 - c.a) + mix(c.rgb, col * c.a, 0.25);
+        }
+      }
 
       float fume = max(max(smoke(px, vec3(1863.0, 296.0, 1.0)), smoke(px, vec3(2077.0, 246.0, 1.1))),
         smoke(px, vec3(1376.0, 364.0, 0.6)));
@@ -745,7 +770,7 @@
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    paintVars = Object.fromEntries(["img", "zones", "clouds", "res", "art", "fit", "dpr", "time", "night",
+    paintVars = Object.fromEntries(["img", "zones", "clouds", "res", "art", "fit", "boat", "dpr", "time", "night",
       "horizon", "wind"].map((n) => [n, gl.getUniformLocation(prog, n)]));
     texture(1, paintZones(), gl.RGBA);
     gl.uniform1i(paintVars.zones, 1);
@@ -798,6 +823,34 @@
     const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
     return x - Math.floor(x);
   };
+  // The boat crosses the bay from behind the headland to the far left, in
+  // two to three and a half minutes, keeping to a lane of its own each time,
+  // and the bay can be empty for up to two minutes in between.
+  const BOAT_LAP = 270;
+  let boatNow = null;
+  const boatAt = (time) => {
+    const n = Math.floor(time / BOAT_LAP);
+    const takes = 120 + 90 * chance(n);
+    const u = (time - n * BOAT_LAP - chance(n + 0.5) * (BOAT_LAP - takes)) / takes;
+    if (u < 0 || u > 1) return null;
+    return [960 - u * 1000, 420 + 26 * chance(n + 0.3) + Math.sin(time * 0.5) * 0.35, 0.8, Math.min(1, u * 14, (1 - u) * 14)];
+  };
+  // The boat's lamp at the masthead
+  const lantern = ([bx, by, k, fade], time, strength) => {
+    const [x, y] = at([bx + 0.5 * k, by - 26 * k]);
+    const a = strength * fade, s = geo.s;
+    pen.save();
+    pen.globalCompositeOperation = "lighter";
+    const r = s * 16;
+    const lamp = pen.createRadialGradient(x, y, 0, x, y, r);
+    lamp.addColorStop(0, `rgba(255,240,200,${(0.95 * a).toFixed(3)})`);
+    lamp.addColorStop(0.2, `rgba(255,190,110,${(0.4 * a).toFixed(3)})`);
+    lamp.addColorStop(1, "rgba(255,170,80,0)");
+    pen.fillStyle = lamp;
+    pen.fillRect(x - r, y - r, r * 2, r * 2);
+    pen.restore();
+  };
+
   // Fireflies in the village gardens after dark, each drifting about a bush
   // of its own and glowing when it likes. They go on the glow, above the
   // night's tint, so they shine.
@@ -831,7 +884,8 @@
   const drawPaint = (time) => {
     const on = paintReady && !reduced;
     landscape.classList.toggle("is-painting", on);
-    if (!on) return false;
+    if (!on) { boatNow = null; return false; }
+    boatNow = boatAt(time);
     // Preserve detail on phones, and bound the fragment cost on 4K/HiDPI
     // displays. The still painting underneath always stays at full quality.
     const scale = Math.min(geo.dpr, Math.sqrt(1400000 / (geo.W * geo.H)));
@@ -839,6 +893,7 @@
     gl.viewport(0, 0, paint.width, paint.height);
     gl.uniform2f(paintVars.res, paint.width, paint.height);
     gl.uniform4f(paintVars.fit, geo.ox, geo.oy, PAINTING[0] * geo.s, PAINTING[1] * geo.s);
+    gl.uniform4fv(paintVars.boat, boatNow || [0, 0, 1, 0]);
     gl.uniform1f(paintVars.dpr, paint.width / geo.W);
     gl.uniform1f(paintVars.time, time);
     gl.uniform1f(paintVars.night, skyState.night);
@@ -860,6 +915,7 @@
     pen.clearRect(0, 0, glow.width, glow.height);
     pen.setTransform(dpr, 0, 0, dpr, 0, 0);
 
+    if (boatNow && st.night > 0.15) lantern(boatNow, time, Math.min(1, st.night * 1.4 - 0.2));
     if (moving && st.night > 0.3) fireflies(time, Math.min(1, st.night * 1.6 - 0.5));
 
     const beam = st.night > 0.08;
