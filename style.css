@@ -124,18 +124,6 @@ ul, ol { list-style: none; }
   height: 100%;
   object-fit: cover;
   object-position: 50% 53%;
-}
-/* The moving painting covers the still one once it has been drawn. */
-.paint {
-  position: absolute;
-  inset: 0;
-  width: 100%;
-  height: 100%;
-  opacity: 0;
-  transition: opacity 0.6s;
-}
-.is-painting .paint { opacity: 1; }
-.landscape img, .paint {
   filter:
     brightness(calc(var(--banner-brightness) * (1 - 0.42 * var(--night))))
     saturate(calc(var(--banner-saturation) * (1 - 0.35 * var(--night)) + 0.3 * var(--gold)));
@@ -226,7 +214,7 @@ ul, ol { list-style: none; }
 
 /* The sun by day, the moon by night. Either can be picked up and dragged
    across the sky; pointing at the banner shows the path it is on. The water
-   reflections follow the waves in the painting; the beam uses the glow canvas. */
+   glints and the lighthouse beam are drawn on the canvas. */
 .landscape { pointer-events: auto; cursor: grab; touch-action: pan-y; user-select: none; -webkit-user-select: none; }
 .landscape img { -webkit-user-drag: none; }
 .is-dragging-sky, .is-dragging-sky * { cursor: grabbing !important; user-select: none; -webkit-user-select: none; }
