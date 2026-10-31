@@ -657,11 +657,6 @@
   // Takes the short way round the clock face.
   const wrap = (m) => ((((m % 1440) + 2160) % 1440) - 720);
   const skyHome = () => { skew = wrap(skew); glideTo(0); };
-  // Walking into the painting keeps whatever hour the banner is showing.
-  const walkIn = document.getElementById("walk-in");
-  const worldHref = () => (Math.round(skew) ? `world/?skew=${Math.round(wrap(skew))}` : "world/");
-  walkIn.addEventListener("pointerenter", () => { walkIn.href = worldHref(); });
-  walkIn.addEventListener("focus", () => { walkIn.href = worldHref(); });
   const skyTo = (minutes, ms = 2600) => { skew = wrap(skew); glideTo(wrap(minutes), ms); };
   const skyDay = () => {
     skew = wrap(skew);
@@ -2046,7 +2041,6 @@
     })),
     { group: "Play", label: "Play the year", hint: "P", run: () => { leaveCareer(); if (!playing) play(); } },
     { group: "Play", label: "Ride the year", hint: "B", run: startRide, when: () => canHover.matches },
-    { group: "Play", label: "Walk into the painting", hint: "3D", run: () => go(worldHref()) },
     { group: "Play", label: "Watch a day go by in Surat", hint: "12 s", run: skyDay },
     { group: "Play", label: "Skip to sunset", hint: "sky", run: () => skyTo(sunCrossing(false) + 12) },
     { group: "Play", label: "Skip to sunrise", hint: "sky", run: () => skyTo(sunCrossing(true) - 12) },
@@ -2234,8 +2228,7 @@
       + "Hand-written HTML, CSS and JS. No framework, no build step.\n"
       + "Source: https://github.com/Prit36/Prit36.github.io\n"
       + "Press P on the page to hear the year, B to ride it, Ctrl K for everything else.\n"
-      + "The sun (or the moon) in the banner can be dragged to another hour.\n"
-      + "And the banner can be walked into: /world/",
+      + "The sun (or the moon) in the banner can be dragged to another hour.",
     "font: 18px/1 monospace; color: #6f7cff;",
     "font: 12px/1.5 monospace;",
   );
