@@ -515,13 +515,11 @@
   // across the bay: the cypresses bend as each one comes through, the olives
   // rustle and flash the silver undersides of their leaves, the chimney
   // smoke leans over, and a strong one tears a few leaves loose and carries
-  // them out over the water. The sea ripples in toward the shore and a fish
-  // rises here and there; once in a while dolphins come through, leaping.
-  // The clouds and their shadows drift with the wind, gulls circle on a
-  // thermal over the bay, a boat sails across now and then, with its lamp
-  // lit at night, and fireflies come out in the village after dark. Run the
-  // pointer over the water and it rings; sweep it across quickly and the
-  // wind picks up. A small shader redraws the picture into a canvas laid over it. The
+  // them out over the water. The sea ripples in toward the shore. The clouds
+  // and their shadows drift slowly across, a gull glides over now and then,
+  // a boat sails across the bay once in a while, with its lamp lit at night,
+  // and fireflies come out in the village after dark. Sweep the pointer
+  // across quickly and the wind picks up. A small shader redraws the picture into a canvas laid over it. The
   // picture stays underneath, still, for a browser without WebGL and for
   // anyone who has asked for less motion.
   const paint = make("canvas", "paint");
@@ -534,10 +532,9 @@
     #else
     precision mediump float;
     #endif
-    uniform sampler2D img, zones;
+    uniform sampler2D img, zones, clouds;
     uniform vec2 res, art;
     uniform vec4 fit, boat;
-    uniform vec4 drops[6];
     uniform float dpr, time, night, horizon, wind;
 
     float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
@@ -548,10 +545,6 @@
                  mix(hash(i + vec2(0.0, 1.0)), hash(i + 1.0), f.x), f.y);
     }
     float fbm(vec2 p) { return noise(p) * 0.55 + noise(p * 2.03 + 7.1) * 0.3 + noise(p * 4.1 + 3.7) * 0.15; }
-    // How much a colour looks like sky or cloud: blue, or bright.
-    float airy(vec3 c) {
-      return max(smoothstep(0.0, 0.05, c.b - c.g), smoothstep(0.68, 0.8, dot(c, vec3(0.3, 0.5, 0.2))));
-    }
     // How much a colour looks like leaves: greener than it is blue or red.
     float leafy(vec3 c) {
       return smoothstep(0.02, 0.07, c.g - c.b) * smoothstep(-0.05, 0.0, c.g - c.r);
@@ -565,17 +558,8 @@
       return g * (0.5 + 0.7 * noise(vec2(t * 0.3, x * 2.0))) + 0.12;
     }
     float gust(float x) { return gustAt(x, time) + wind; }
-    // A ring spreading on the water from v away, squashed by the perspective
-    // the way the ripples are. It pushes the water outward along push.
-    float ring(vec2 v, float age, float speed, float d, inout vec2 push) {
-      v.y /= 0.3 + 0.6 * d;
-      float r = length(v), x = r - age * speed;
-      float wave = sin(x * 0.45) * exp(-x * x / 160.0) * exp(-age * 1.1);
-      push += v / (r + 0.001) * wave;
-      return wave;
-    }
     // Antialiased coverage, from a signed distance in pixels.
-    float cover(float d) { return clamp(d + 0.5, 0.0, 1.0); }
+    float cover(float d) { return clamp(d * 0.8 + 0.5, 0.0, 1.0); }
     vec4 over(vec4 c, vec3 rgb, float a) { return c * (1.0 - a) + vec4(rgb, 1.0) * a; }
 
     // The boat, in painting pixels from the middle of its waterline. It runs
@@ -594,43 +578,36 @@
       return c;
     }
 
-    // A gull seen from below, as a curve that bends with the wingbeat. It
-    // flaps in bursts and glides in between. The first four ride a thermal
-    // over the bay, circling a point that wanders, banked into the turn, the
-    // ring opening and closing; the other two cross the sky on their own,
-    // each time at another height and speed, from either side.
+    // A gull far off against the sky, a thin soft stroke the colour of the
+    // sky behind it, only darker. It glides across on the breeze, rising and
+    // sinking a little and leaning as it does, and now and then beats its
+    // wings a few times before gliding on. Each crossing is at a height,
+    // speed and from a side of its own, and the sky is empty for a while
+    // between them.
     float gull(vec2 p, float i, float horizonY) {
       float w = res.x / dpr;
-      float h = hash(vec2(i, 3.7)), k = hash(vec2(i, 9.1));
-      float big = clamp(res.y / dpr / 180.0, 0.7, 1.4);
-      vec2 c;
-      float depth = 1.0, bank = 0.0;
-      if (i < 4.0) {
-        vec2 hub = vec2(w * (0.3 + 0.18 * sin(time * 0.013) + 0.08 * sin(time * 0.031 + 1.0)),
-          horizonY * (0.42 + 0.12 * sin(time * 0.021 + 2.0)));
-        float turn = time * (0.16 + 0.12 * h) * (k > 0.3 ? 1.0 : -1.0) + i * 1.7;
-        float wide = (26.0 + 30.0 * k) * (0.75 + 0.35 * sin(time * 0.05 + i)) * big;
-        c = hub + vec2(cos(turn) * wide, sin(turn) * wide * 0.32 + sin(time * 0.4 + i) * 2.0);
-        depth = 1.0 + 0.18 * sin(turn);
-        bank = 0.3 * cos(turn);
-      } else {
-        float lap = 34.0 + 20.0 * h, run = time / lap + k, n = floor(run);
-        float u = fract(run);
-        if (hash(vec2(i, n)) > 0.5) u = 1.0 - u;
-        c = vec2(mix(-60.0, w + 60.0, u), horizonY * (0.15 + 0.55 * hash(vec2(i, n + 0.5))) + sin(time * 0.35 + i) * 3.0);
-        depth = 0.8 + 0.4 * hash(vec2(i, n + 0.8));
-      }
-      float s = (3.5 + 2.5 * h) * big * depth;
+      float run = time / (80.0 + 40.0 * hash(vec2(i, 3.7))) + hash(vec2(i, 9.1));
+      float n = floor(run), u = fract(run) * 1.5;
+      if (u > 1.0) return 0.0;
+      if (hash(vec2(i, n)) > 0.5) u = 1.0 - u;
+      float bob = noise(vec2(time * 0.15, i * 7.0));
+      vec2 c = vec2(mix(-40.0, w + 40.0, u), horizonY * (0.2 + 0.45 * hash(vec2(i, n + 0.5))) + (bob - 0.5) * 16.0);
+      float s = (2.6 + 1.8 * hash(vec2(i, n + 0.8))) * clamp(res.y / dpr / 180.0, 0.8, 1.4);
       vec2 r = (p - c) / s;
-      r = vec2(r.x * cos(bank) - r.y * sin(bank), r.x * sin(bank) + r.y * cos(bank));
+      if (abs(r.x) > 1.3 || abs(r.y) > 1.3) return 0.0;
+      float lean = clamp((noise(vec2(time * 0.15 + 0.2, i * 7.0)) - bob) * 4.0, -0.3, 0.3);
+      r = vec2(r.x * cos(lean) - r.y * sin(lean), r.x * sin(lean) + r.y * cos(lean));
+      float beating = smoothstep(0.6, 0.75, noise(vec2(time * 0.22, i * 3.1)));
+      float flap = sin(time * 15.0 + i * 2.0) * beating;
+      float flex = 0.05 * sin(time * 1.3 + i);
       float ax = abs(r.x);
-      if (ax > 1.0 || abs(r.y) > 1.2) return 0.0;
-      float burst = smoothstep(0.2, 0.7, sin(time * 0.45 + i * 1.9));
-      float lift = mix(0.25, sin(time * 9.0 + i * 4.0), burst);
-      float shoulder = -0.28 - 0.12 * lift, tip = 0.1 - 0.75 * lift;
-      float wing = mix(mix(0.0, shoulder, ax), mix(shoulder, tip, ax), ax);
-      float th = max(0.55, (0.15 * (1.0 - 0.75 * ax) + 0.02) * s);
-      return (1.0 - smoothstep(th - 0.5, th + 0.5, abs(r.y - wing) * s)) * smoothstep(1.0, 0.8, ax);
+      // A shallow M: the arm up to the wrist, the hand angled down from it
+      float wrist = -0.2 - 0.35 * flap + flex, tip = 0.06 - 0.8 * flap + flex;
+      float k = smoothstep(0.25, 0.6, ax);
+      float wing = mix(wrist * ax / 0.42, mix(wrist, tip, (ax - 0.42) / 0.58), k);
+      float th = (0.1 * (1.0 - 0.7 * ax) + 0.03) * s;
+      float stroke = 1.0 - smoothstep(th - 0.4, th + 0.9, abs(r.y - wing) * s);
+      return stroke * (1.0 - smoothstep(0.7, 1.0, ax));
     }
 
     // A leaf torn off the village trees and blown out over the bay,
@@ -640,7 +617,7 @@
       float h = hash(vec2(i, 1.3)), span = 4.0 + 3.0 * h;
       float launch = (n + 0.6 * hash(vec2(i, n + 0.2))) * span - h * 17.0;
       float age = time - launch;
-      if (age < 0.0 || age > 6.0 || hash(vec2(i, n + 0.4)) > gustAt(0.9, launch) * 1.3 - 0.1) return vec4(0.0);
+      if (age < 0.0 || age > 6.0 || hash(vec2(i, n + 0.4)) > gustAt(0.9, launch) - 0.25) return vec4(0.0);
       float big = clamp(res.x / dpr / 1280.0, 0.6, 1.4);
       vec2 from = fit.xy + vec2(0.84 + 0.14 * hash(vec2(i, n + 0.5)), 0.38 + 0.14 * hash(vec2(i, n + 0.7))) * fit.zw;
       vec2 at = from + vec2(-(55.0 + 60.0 * h) * big * age * (1.0 - 0.05 * age),
@@ -650,7 +627,7 @@
       q = vec2(q.x * cos(age * 2.0) - q.y * sin(age * 2.0), q.x * sin(age * 2.0) + q.y * cos(age * 2.0));
       float len = (1.4 + 1.1 * h) * big;
       float e = length(q / vec2(len * abs(cos(spin)) + 0.45, len * 0.5 + 0.2));
-      float a = smoothstep(1.0, 0.55, e) * smoothstep(0.0, 0.3, age) * smoothstep(6.0, 4.2, age);
+      float a = (1.0 - smoothstep(0.5, 1.1, e)) * smoothstep(0.0, 0.3, age) * (1.0 - smoothstep(4.2, 6.0, age)) * 0.85;
       return vec4(mix(vec3(0.38, 0.47, 0.2), vec3(0.74, 0.66, 0.32), hash(vec2(i, n + 0.9))), a);
     }
     vec4 leaf(vec2 p, float i) {
@@ -658,54 +635,6 @@
       float n = floor((time + h * 17.0) / (4.0 + 3.0 * h));
       vec4 a = leafFrom(p, i, n), b = leafFrom(p, i, n - 1.0);
       return a.a > b.a ? a : b;
-    }
-
-    // Now and then a pod of two or three dolphins comes through the bay,
-    // leaping as it goes: at no set time, in no set place, and sometimes
-    // not for minutes. Each is drawn only where it is out of the water,
-    // with spray where it breaks the surface and where it dives back in.
-    vec4 dolphins(vec2 px) {
-      float slot = 38.0, n = floor(time / slot);
-      vec4 c = vec4(0.0);
-      for (int j = 0; j < 2; j++) {
-        float m = n - float(j);
-        if (hash(vec2(m, 2.2)) > 0.55) continue;
-        float start = (m + 0.6 * hash(vec2(m, 3.3))) * slot;
-        float dir = hash(vec2(m, 4.4)) > 0.5 ? 1.0 : -1.0;
-        vec2 home = vec2(150.0 + 750.0 * hash(vec2(m, 5.5)), 405.0 + 55.0 * hash(vec2(m, 6.6)));
-        if (abs(px.x - home.x) > 200.0 || abs(px.y - home.y) > 40.0) continue;
-        float k = 0.6 + 1.6 * clamp((home.y - horizon * art.y) / (art.y - horizon * art.y), 0.0, 1.0);
-        for (int f = 0; f < 3; f++) {
-          float fi = float(f);
-          if (f == 2 && hash(vec2(m, 7.7)) > 0.5) break;
-          float t = time - start - fi * 0.45;
-          if (t < 0.0 || t > 4.0 * 1.7) continue;
-          float leap = floor(t / 1.7), u = fract(t / 1.7) / 0.65;
-          float sea = home.y + fi * 3.0 * k;
-          float x0 = home.x + dir * ((leap * 30.0 - fi * 7.0) * k);
-          for (int e = 0; e < 2; e++) {
-            float since = e == 0 ? u : u - 1.0;
-            if (since < 0.0 || since > 0.45) continue;
-            vec2 v = (px - vec2(x0 + dir * float(e) * 24.0 * k, sea - 1.0)) / k;
-            float spray = exp(-(v.x * v.x / 9.0 + v.y * v.y / 2.5)) * (1.0 - since / 0.45);
-            c += vec4(vec3(0.95, 0.97, 1.0), 1.0) * spray * 0.75 * (1.0 - c.a);
-          }
-          if (u > 1.0) continue;
-          float rise = 4.0 * u * (1.0 - u) * 9.0 * k;
-          vec2 mid = vec2(x0 + dir * u * 24.0 * k, sea - rise);
-          float tilt = atan(-(1.0 - 2.0 * u) * 36.0, 24.0) * 0.85 * dir;
-          vec2 q = (px - mid) / k;
-          q = vec2(q.x * cos(tilt) + q.y * sin(tilt), -q.x * sin(tilt) + q.y * cos(tilt));
-          q.x *= dir;
-          float th = 1.7 * sqrt(max(0.0, 1.0 - q.x * q.x / 42.0)) * (q.x > 0.0 ? 1.0 - 0.25 * q.x / 6.5 : 1.0);
-          float body = th > 0.0 ? cover((th - abs(q.y + 0.1)) * k) * cover((6.5 - abs(q.x)) * k) : 0.0;
-          float top = -th - 2.4 * clamp(1.0 - (q.x + 1.5) / 2.5, 0.0, 1.0);
-          float fin = cover((q.y - top) * k) * cover((q.x + 1.5) * k) * cover((1.0 - q.x) * k) * cover(-q.y * k);
-          float a = max(body, fin) * cover(sea - px.y);
-          c = over(c, mix(vec3(0.24, 0.29, 0.37), vec3(0.62, 0.64, 0.68), smoothstep(0.3, 1.2, q.y)), a);
-        }
-      }
-      return c;
     }
 
     // Smoke from a chimney at c (x, y and size, in the painting), rising in
@@ -747,46 +676,16 @@
         float rough = 0.75 + 0.5 * wnd;
         at += (vec2(a, b) - 0.5) * vec2(0.004, 0.007) * (0.15 + 0.85 * d) * rough * zone.r;
         float crest = smoothstep(0.6, 0.78, a * 0.6 + b * 0.4) * rough;
-
-        // Rings where the pointer touched the water
-        vec2 push = vec2(0.0);
-        float ringing = 0.0;
-        for (int i = 0; i < 6; i++) {
-          float age = time - drops[i].z;
-          if (age < 0.0 || age > 3.5) continue;
-          vec2 shove = vec2(0.0);
-          ringing += ring(css - drops[i].xy, age, 40.0, d, shove) * drops[i].w;
-          push += shove * drops[i].w;
-        }
-        // and small ones where a fish came up, here and there, now and then
-        for (int i = 0; i < 4; i++) {
-          float fi = float(i), span = 2.3 + 1.7 * hash(vec2(fi, 0.7));
-          float n = floor((time + fi * 5.1) / span);
-          float age = time + fi * 5.1 - (n + 0.5 * hash(vec2(fi, n))) * span;
-          if (age < 0.0 || age > 2.5 || hash(vec2(fi, n + 0.5)) > 0.6) continue;
-          vec2 rise = vec2(60.0 + 1450.0 * hash(vec2(fi, n + 0.1)), 392.0 + 100.0 * hash(vec2(fi, n + 0.2)));
-          vec2 shove = vec2(0.0);
-          ringing += ring(css - (fit.xy + rise / art * fit.zw), age, 22.0, d, shove) * 0.4;
-          push += shove * 0.4;
-        }
-        at += push * 2.4 / fit.zw * zone.r;
-        shine = vec3(1.0, 0.98, 0.93) * (crest * 0.08 * d + max(0.0, ringing) * 0.12) * zone.r * (1.0 - 0.8 * night);
+        shine = vec3(1.0, 0.98, 0.93) * crest * 0.08 * d * zone.r * (1.0 - 0.8 * night);
       }
 
-      // The clouds drift on the wind. Two copies of the sky slide along,
-      // each fading out as it wraps back, so the drift never jumps. The
-      // hand-over is kept short, since the two copies show a cloud's edge
-      // twice while it lasts.
+      // The clouds drift slowly to the left on the wind, the whole sky
+      // together, from a copy of it that wraps round. The hills, and the
+      // cypresses and the tower that reach above them, stay where they are.
       vec3 col = texture2D(img, at).rgb;
       if (zone.g > 0.003) {
-        float cycle = time / 18.0;
-        float p0 = fract(cycle), p1 = fract(cycle + 0.5);
-        vec2 q = uv * vec2(3.0, 6.0);
-        vec2 drift = (vec2(-0.006, 0.0) + (vec2(noise(q + time * 0.02), noise(q + vec2(8.3, 2.1) - time * 0.015)) - 0.5)
-          * vec2(0.004, 0.0015)) * zone.g;
-        vec3 a = texture2D(img, at - drift * p0).rgb, b = texture2D(img, at - drift * p1).rgb;
-        // The cypresses and towers that reach above the skyline hold still.
-        col = mix(col, mix(a, b, smoothstep(0.3, 0.7, abs(2.0 * p0 - 1.0))), airy(col) * airy(a) * airy(b));
+        vec2 q = vec2(mod(at.x * art.x + time * 3.0, 1200.0) / 1200.0, min(at.y * art.y, 364.0) / 380.0);
+        col = mix(col, texture2D(clouds, q).rgb, zone.g);
       }
 
       // Leaves rustle, more in a gust, and the olives turn up the silver
@@ -803,7 +702,7 @@
       }
 
       // The shadows of the clouds pass over the land and the water.
-      float shade = smoothstep(0.52, 0.72, fbm(uv * vec2(3.0, 9.0) + vec2(time * 0.012, 0.0)));
+      float shade = smoothstep(0.52, 0.72, fbm(uv * vec2(3.0, 9.0) + vec2(time * 0.0041, 0.0)));
       col *= 1.0 - 0.1 * shade * (1.0 - zone.g) * (1.0 - night);
       col += shine;
 
@@ -813,23 +712,20 @@
         if (abs(p.x) < 170.0 && p.y > -30.0 && p.y < 34.0) {
           float behind = p.x - 8.0;
           if (behind > 0.0 && p.y > -1.0) {
-            float wide = 1.0 + behind * 0.045;
-            float foam = exp(-behind / 55.0) * (1.0 - smoothstep(0.0, wide, abs(p.y - 0.8 - behind * 0.02)))
-              * smoothstep(0.25, 0.75, noise(vec2(px.x / boat.z * 0.3 + time * 1.5, p.y * 1.2)));
-            col += vec3(0.95, 0.97, 1.0) * foam * 0.35 * boat.w * zone.r * (1.0 - 0.6 * night);
+            float wide = 1.2 + behind * 0.035;
+            float slick = exp(-behind / 70.0) * (1.0 - smoothstep(0.0, wide, abs(p.y - 0.8 - behind * 0.015)))
+              * (0.7 + 0.3 * noise(vec2(px.x / boat.z * 0.08 + time * 0.4, p.y * 0.5)));
+            col = mix(col, col * 1.08 + 0.03, slick * 0.6 * boat.w * zone.r * (1.0 - 0.6 * night));
           }
           if (p.y > 0.5) {
-            vec2 m = vec2(p.x + sin(p.y * 0.9 - time * 3.0) * min(1.0, p.y / 4.0) * 1.3, 1.0 - p.y);
+            vec2 m = vec2(p.x + sin(p.y * 0.5 - time * 1.6) * min(1.0, p.y / 6.0) * 0.6, 1.0 - p.y);
             vec4 r = boatShape(m) * 0.4 * (1.0 - smoothstep(4.0, 28.0, p.y)) * boat.w * zone.r;
             col = col * (1.0 - r.a) + r.rgb * 0.85;
           }
           vec4 c = boatShape(p) * boat.w;
-          col = col * (1.0 - c.a) + c.rgb;
+          col = col * (1.0 - c.a) + mix(c.rgb, col * c.a, 0.25);
         }
       }
-
-      vec4 pod = dolphins(px);
-      col = col * (1.0 - pod.a) + pod.rgb;
 
       float fume = max(max(smoke(px, vec3(1863.0, 296.0, 1.0)), smoke(px, vec3(2077.0, 246.0, 1.1))),
         smoke(px, vec3(1376.0, 364.0, 0.6)));
@@ -838,8 +734,8 @@
       float horizonY = fit.y + horizon * fit.w;
       if (css.y < horizonY && night < 0.9) {
         float bird = 0.0;
-        for (int i = 0; i < 6; i++) bird = max(bird, gull(css, float(i), horizonY));
-        col = mix(col, vec3(0.16, 0.17, 0.22), bird * 0.78 * (1.0 - night));
+        for (int i = 0; i < 3; i++) bird = max(bird, gull(css, float(i), horizonY));
+        col = mix(col, col * vec3(0.42, 0.45, 0.52), bird * 0.85 * (1.0 - night));
       }
       if (night < 0.95) {
         for (int i = 0; i < 6; i++) {
@@ -886,7 +782,12 @@
       for (let i = 0; i < px.length; i += 4) zones.data[i + channel] = px[i];
     };
     zone(0, () => shape(SEA.map(([u, v]) => [u * PAINTING[0], v * PAINTING[1]])));
-    zone(1, () => shape([...SKYLINE.map(([x, y]) => [x, y - 8]), [PAINTING[0], -40], [0, -40]]));
+    // The sky, less the cypresses and the bell tower that reach up into it
+    zone(1, () => {
+      shape([...SKYLINE.map(([x, y]) => [x, y - 8]), [PAINTING[0], -40], [0, -40]]);
+      g.fillStyle = "#000";
+      [...CYPRESSES, [2016, 180, 262, 16]].forEach(([x, top, foot, half]) => g.fillRect(x - half - 6, top - 10, (half + 6) * 2, foot - top + 10));
+    });
     // The headland and the village, below the hills behind them
     zone(2, () => shape([[1120, 335], [1440, 340], [1700, 330], [1790, 240], [1880, 110], [PAINTING[0], 90],
       [PAINTING[0], PAINTING[1]], [1120, PAINTING[1]]]));
@@ -905,7 +806,52 @@
     });
     return zones;
   };
-  let paintVars = null, paintTexture = null, paintReady = false;
+  // A sky that can drift: the painting's own, from its left end to over the
+  // headland, with what is behind the hills filled in by the haze of each
+  // row and its two ends blended together, so it wraps round without a seam.
+  // The ends were picked where the sky at one looks most like the sky at
+  // the other.
+  const SKY_WRAP = 1200, SKY_BLEND = 320, SKY_ROWS = 380;
+  const driftingSky = () => {
+    const w = SKY_WRAP + SKY_BLEND;
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = SKY_ROWS;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    g.drawImage(bannerImg, 0, 0, PAINTING[0], PAINTING[1]);
+    const src = g.getImageData(0, 0, w, SKY_ROWS).data;
+    const top = new Float32Array(w);
+    for (let x = 0, i = 1; x < w; x++) {
+      while (SKYLINE[i][0] < x) i++;
+      const [[x0, y0], [x1, y1]] = [SKYLINE[i - 1], SKYLINE[i]];
+      top[x] = y0 + ((y1 - y0) * (x - x0)) / (x1 - x0) - 6;
+    }
+    const haze = new Float32Array(SKY_ROWS * 3);
+    for (let y = 0; y < SKY_ROWS; y++) {
+      const sum = [0, 0, 0];
+      let n = 0;
+      for (let x = 0; x < w; x++) {
+        if (y >= top[x] && n) continue;
+        for (let k = 0; k < 3; k++) sum[k] += src[(y * w + x) * 4 + k];
+        n++;
+      }
+      for (let k = 0; k < 3; k++) haze[y * 3 + k] = sum[k] / n;
+    }
+    const filled = (x, y, k) => {
+      const f = smooth(-28, 0, y - top[x]);
+      return src[(y * w + x) * 4 + k] * (1 - f) + haze[y * 3 + k] * f;
+    };
+    const sky = new ImageData(SKY_WRAP, SKY_ROWS);
+    for (let y = 0; y < SKY_ROWS; y++) {
+      for (let x = 0; x < SKY_WRAP; x++) {
+        const f = smooth(0, SKY_BLEND, x), o = (y * SKY_WRAP + x) * 4;
+        for (let k = 0; k < 3; k++) sky.data[o + k] = x < SKY_BLEND ? filled(x, y, k) * f + filled(x + SKY_WRAP, y, k) * (1 - f) : filled(x, y, k);
+        sky.data[o + 3] = 255;
+      }
+    }
+    return sky;
+  };
+  let paintVars = null, paintTexture = null, cloudTexture = null, paintReady = false;
   const texture = (unit, source, format = gl.RGB) => {
     const t = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0 + unit);
@@ -934,10 +880,12 @@
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    paintVars = Object.fromEntries(["img", "zones", "res", "art", "fit", "boat", "drops", "dpr", "time", "night",
+    paintVars = Object.fromEntries(["img", "zones", "clouds", "res", "art", "fit", "boat", "dpr", "time", "night",
       "horizon", "wind"].map((n) => [n, gl.getUniformLocation(prog, n)]));
     texture(1, paintZones(), gl.RGBA);
     gl.uniform1i(paintVars.zones, 1);
+    cloudTexture = texture(2);
+    gl.uniform1i(paintVars.clouds, 2);
     gl.uniform1f(paintVars.horizon, HORIZON / PAINTING[1]);
     gl.uniform2f(paintVars.art, PAINTING[0], PAINTING[1]);
     paintTexture = texture(0);
@@ -950,6 +898,9 @@
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, paintTexture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, bannerImg);
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, cloudTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, driftingSky());
     paintReady = true;
     wakeSky();
   };
@@ -962,32 +913,19 @@
   });
   paint.addEventListener("webglcontextrestored", startPaint);
 
-  // Rings on the water: where the pointer touched it, when, and how hard.
-  // Each is x, y in the banner, the time, and the strength; six at most.
-  const drops = new Float32Array(24).fill(-99);
-  let nextDrop = 0, lastDrop = null, windKick = 0, windKickAt = 0;
+  // A quick sweep of the pointer across the banner is a gust of its own.
+  let lastSweep = null, windKick = 0, windKickAt = 0;
   const windNow = (t) => windKick * Math.exp(-(t - windKickAt) * 0.7);
-  const drop = (e, strength) => {
-    if (reduced || !paintReady || !geo) return;
-    const b = landscape.getBoundingClientRect();
-    const x = e.clientX - b.left, y = e.clientY - b.top, t = e.timeStamp / 1000;
-    drops.set([x, y, t, strength], nextDrop * 4);
-    nextDrop = (nextDrop + 1) % 6;
-    lastDrop = [x, y, t];
-  };
-  landscape.addEventListener("pointerdown", (e) => drop(e, 1));
   landscape.addEventListener("pointermove", (e) => {
-    if (e.pointerType !== "mouse" || drag) return;
-    const b = landscape.getBoundingClientRect();
-    const x = e.clientX - b.left, y = e.clientY - b.top, t = e.timeStamp / 1000;
-    if (!lastDrop) { lastDrop = [x, y, t]; return; }
-    const far = Math.hypot(x - lastDrop[0], y - lastDrop[1]);
-    if (far < 22) return;
-    const speed = far / Math.max(0.016, t - lastDrop[2]);
-    // A quick sweep is a gust of its own.
-    windKick = Math.min(1.2, windNow(t) + speed / 6000);
-    windKickAt = t;
-    drop(e, Math.min(1, 0.35 + speed / 1500));
+    if (e.pointerType !== "mouse" || drag || reduced) return;
+    const x = e.clientX, y = e.clientY, t = e.timeStamp / 1000;
+    if (lastSweep) {
+      const far = Math.hypot(x - lastSweep[0], y - lastSweep[1]);
+      if (far < 22) return;
+      windKick = Math.min(1, windNow(t) + far / Math.max(0.016, t - lastSweep[2]) / 8000);
+      windKickAt = t;
+    }
+    lastSweep = [x, y, t];
   });
 
   // The same numbers every visit for the same moment, but no pattern to them
@@ -1076,7 +1014,6 @@
     gl.uniform2f(paintVars.res, paint.width, paint.height);
     gl.uniform4f(paintVars.fit, geo.ox, geo.oy, PAINTING[0] * geo.s, PAINTING[1] * geo.s);
     gl.uniform4fv(paintVars.boat, boatNow || [0, 0, 1, 0]);
-    gl.uniform4fv(paintVars.drops, drops);
     gl.uniform1f(paintVars.dpr, paint.width / geo.W);
     gl.uniform1f(paintVars.time, time);
     gl.uniform1f(paintVars.night, skyState.night);
