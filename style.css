@@ -124,6 +124,21 @@ ul, ol { list-style: none; }
   height: 100%;
   object-fit: cover;
   object-position: 50% 53%;
+}
+/* The renderer's canvas lies exactly over the <img> and draws the same
+   picture, so it takes the same light. It shows only once it has drawn. */
+.landscape .scene {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  visibility: hidden;
+  pointer-events: none;
+}
+.landscape .scene.is-live { visibility: visible; }
+.landscape img,
+.landscape .scene {
   filter:
     brightness(calc(var(--banner-brightness) * (1 - 0.42 * var(--night))))
     saturate(calc(var(--banner-saturation) * (1 - 0.35 * var(--night)) + 0.3 * var(--gold)));
