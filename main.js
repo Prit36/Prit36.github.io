@@ -510,6 +510,581 @@
     pen.restore();
   };
 
+  // The painting itself moves, and none of it on a timer. A breeze blows in
+  // off the sea from the right, in gusts that come when they come and sweep
+  // across the bay: the cypresses bend as each one comes through, the olives
+  // rustle and flash the silver undersides of their leaves, the chimney
+  // smoke leans over, and a strong one tears a few leaves loose and carries
+  // them out over the water. The sea ripples in toward the shore and a fish
+  // rises here and there; once in a while dolphins come through, leaping.
+  // The clouds and their shadows drift with the wind, gulls circle on a
+  // thermal over the bay, a boat sails across now and then, with its lamp
+  // lit at night, and fireflies come out in the village after dark. Run the
+  // pointer over the water and it rings; sweep it across quickly and the
+  // wind picks up. A small shader redraws the picture into a canvas laid over it. The
+  // picture stays underneath, still, for a browser without WebGL and for
+  // anyone who has asked for less motion.
+  const paint = make("canvas", "paint");
+  bannerImg.after(paint);
+  const gl = paint.getContext("webgl", { alpha: false, antialias: false, depth: false, stencil: false });
+  const PAINT_VERT = "attribute vec2 p; void main() { gl_Position = vec4(p, 0.0, 1.0); }";
+  const PAINT_FRAG = `
+    #ifdef GL_FRAGMENT_PRECISION_HIGH
+    precision highp float;
+    #else
+    precision mediump float;
+    #endif
+    uniform sampler2D img, zones;
+    uniform vec2 res, art;
+    uniform vec4 fit, boat;
+    uniform vec4 drops[6];
+    uniform float dpr, time, night, horizon, wind;
+
+    float hash(vec2 p) { return fract(sin(dot(p, vec2(127.1, 311.7))) * 43758.5453); }
+    float noise(vec2 p) {
+      vec2 i = floor(p), f = fract(p);
+      f = f * f * (3.0 - 2.0 * f);
+      return mix(mix(hash(i), hash(i + vec2(1.0, 0.0)), f.x),
+                 mix(hash(i + vec2(0.0, 1.0)), hash(i + 1.0), f.x), f.y);
+    }
+    float fbm(vec2 p) { return noise(p) * 0.55 + noise(p * 2.03 + 7.1) * 0.3 + noise(p * 4.1 + 3.7) * 0.15; }
+    // How much a colour looks like sky or cloud: blue, or bright.
+    float airy(vec3 c) {
+      return max(smoothstep(0.0, 0.05, c.b - c.g), smoothstep(0.68, 0.8, dot(c, vec3(0.3, 0.5, 0.2))));
+    }
+    // How much a colour looks like leaves: greener than it is blue or red.
+    float leafy(vec3 c) {
+      return smoothstep(0.02, 0.07, c.g - c.b) * smoothstep(-0.05, 0.0, c.g - c.r);
+    }
+    // The wind at a point across the painting, at a given moment: a breeze
+    // that never quite settles, and gusts that come when they come, each one
+    // crossing the bay from right to left.
+    float gustAt(float x, float t) {
+      float s = t * 0.09 + x * 0.45;
+      float g = smoothstep(0.42, 0.78, noise(vec2(s, 0.5)) * 0.65 + noise(vec2(s * 2.3, 4.1)) * 0.35);
+      return g * (0.5 + 0.7 * noise(vec2(t * 0.3, x * 2.0))) + 0.12;
+    }
+    float gust(float x) { return gustAt(x, time) + wind; }
+    // A ring spreading on the water from v away, squashed by the perspective
+    // the way the ripples are. It pushes the water outward along push.
+    float ring(vec2 v, float age, float speed, float d, inout vec2 push) {
+      v.y /= 0.3 + 0.6 * d;
+      float r = length(v), x = r - age * speed;
+      float wave = sin(x * 0.45) * exp(-x * x / 160.0) * exp(-age * 1.1);
+      push += v / (r + 0.001) * wave;
+      return wave;
+    }
+    // Antialiased coverage, from a signed distance in pixels.
+    float cover(float d) { return clamp(d + 0.5, 0.0, 1.0); }
+    vec4 over(vec4 c, vec3 rgb, float a) { return c * (1.0 - a) + vec4(rgb, 1.0) * a; }
+
+    // The boat, in painting pixels from the middle of its waterline. It runs
+    // before the wind, to the left, heeling a little on the swell.
+    vec4 boatShape(vec2 p) {
+      vec2 s = vec2(p.x + p.y * 0.05 * sin(time * 1.1), p.y);
+      float mast = cover(0.5 - abs(s.x - 0.5)) * cover(-3.0 - s.y) * cover(s.y + 26.0);
+      float sail = cover(s.x - 1.0) * cover(-5.0 - s.y) * cover((1.0 + (s.y + 25.0) * 0.45 - s.x) * 0.91);
+      float jib = cover(-s.x) * cover(-4.5 - s.y) * cover((s.x + (s.y + 23.0) * 0.432) * 0.918);
+      float hull = cover(p.y + 3.0) * cover(0.5 - p.y) * cover(9.0 - (p.y + 3.0) * 0.8 - abs(p.x));
+      vec4 c = vec4(0.0);
+      c = over(c, vec3(0.32, 0.28, 0.26), mast);
+      c = over(c, mix(vec3(0.99, 0.97, 0.92), vec3(0.86, 0.85, 0.84), smoothstep(-25.0, -5.0, s.y) * 0.5), sail);
+      c = over(c, vec3(0.88, 0.87, 0.85), jib);
+      c = over(c, p.y > -1.0 ? vec3(0.2, 0.24, 0.34) : vec3(0.96, 0.94, 0.9), hull);
+      return c;
+    }
+
+    // A gull seen from below, as a curve that bends with the wingbeat. It
+    // flaps in bursts and glides in between. The first four ride a thermal
+    // over the bay, circling a point that wanders, banked into the turn, the
+    // ring opening and closing; the other two cross the sky on their own,
+    // each time at another height and speed, from either side.
+    float gull(vec2 p, float i, float horizonY) {
+      float w = res.x / dpr;
+      float h = hash(vec2(i, 3.7)), k = hash(vec2(i, 9.1));
+      float big = clamp(res.y / dpr / 180.0, 0.7, 1.4);
+      vec2 c;
+      float depth = 1.0, bank = 0.0;
+      if (i < 4.0) {
+        vec2 hub = vec2(w * (0.3 + 0.18 * sin(time * 0.013) + 0.08 * sin(time * 0.031 + 1.0)),
+          horizonY * (0.42 + 0.12 * sin(time * 0.021 + 2.0)));
+        float turn = time * (0.16 + 0.12 * h) * (k > 0.3 ? 1.0 : -1.0) + i * 1.7;
+        float wide = (26.0 + 30.0 * k) * (0.75 + 0.35 * sin(time * 0.05 + i)) * big;
+        c = hub + vec2(cos(turn) * wide, sin(turn) * wide * 0.32 + sin(time * 0.4 + i) * 2.0);
+        depth = 1.0 + 0.18 * sin(turn);
+        bank = 0.3 * cos(turn);
+      } else {
+        float lap = 34.0 + 20.0 * h, run = time / lap + k, n = floor(run);
+        float u = fract(run);
+        if (hash(vec2(i, n)) > 0.5) u = 1.0 - u;
+        c = vec2(mix(-60.0, w + 60.0, u), horizonY * (0.15 + 0.55 * hash(vec2(i, n + 0.5))) + sin(time * 0.35 + i) * 3.0);
+        depth = 0.8 + 0.4 * hash(vec2(i, n + 0.8));
+      }
+      float s = (3.5 + 2.5 * h) * big * depth;
+      vec2 r = (p - c) / s;
+      r = vec2(r.x * cos(bank) - r.y * sin(bank), r.x * sin(bank) + r.y * cos(bank));
+      float ax = abs(r.x);
+      if (ax > 1.0 || abs(r.y) > 1.2) return 0.0;
+      float burst = smoothstep(0.2, 0.7, sin(time * 0.45 + i * 1.9));
+      float lift = mix(0.25, sin(time * 9.0 + i * 4.0), burst);
+      float shoulder = -0.28 - 0.12 * lift, tip = 0.1 - 0.75 * lift;
+      float wing = mix(mix(0.0, shoulder, ax), mix(shoulder, tip, ax), ax);
+      float th = max(0.55, (0.15 * (1.0 - 0.75 * ax) + 0.02) * s);
+      return (1.0 - smoothstep(th - 0.5, th + 0.5, abs(r.y - wing) * s)) * smoothstep(1.0, 0.8, ax);
+    }
+
+    // A leaf torn off the village trees and blown out over the bay,
+    // tumbling as it goes. Each leaf gets a chance every few seconds, and
+    // takes it more often the harder the wind blows over the village then.
+    vec4 leafFrom(vec2 p, float i, float n) {
+      float h = hash(vec2(i, 1.3)), span = 4.0 + 3.0 * h;
+      float launch = (n + 0.6 * hash(vec2(i, n + 0.2))) * span - h * 17.0;
+      float age = time - launch;
+      if (age < 0.0 || age > 6.0 || hash(vec2(i, n + 0.4)) > gustAt(0.9, launch) * 1.3 - 0.1) return vec4(0.0);
+      float big = clamp(res.x / dpr / 1280.0, 0.6, 1.4);
+      vec2 from = fit.xy + vec2(0.84 + 0.14 * hash(vec2(i, n + 0.5)), 0.38 + 0.14 * hash(vec2(i, n + 0.7))) * fit.zw;
+      vec2 at = from + vec2(-(55.0 + 60.0 * h) * big * age * (1.0 - 0.05 * age),
+        (4.0 + 2.0 * age) * age + sin(age * (2.5 + h) + i) * 7.0);
+      float spin = age * (5.0 + 4.0 * h) + i;
+      vec2 q = p - at;
+      q = vec2(q.x * cos(age * 2.0) - q.y * sin(age * 2.0), q.x * sin(age * 2.0) + q.y * cos(age * 2.0));
+      float len = (1.4 + 1.1 * h) * big;
+      float e = length(q / vec2(len * abs(cos(spin)) + 0.45, len * 0.5 + 0.2));
+      float a = smoothstep(1.0, 0.55, e) * smoothstep(0.0, 0.3, age) * smoothstep(6.0, 4.2, age);
+      return vec4(mix(vec3(0.38, 0.47, 0.2), vec3(0.74, 0.66, 0.32), hash(vec2(i, n + 0.9))), a);
+    }
+    vec4 leaf(vec2 p, float i) {
+      float h = hash(vec2(i, 1.3));
+      float n = floor((time + h * 17.0) / (4.0 + 3.0 * h));
+      vec4 a = leafFrom(p, i, n), b = leafFrom(p, i, n - 1.0);
+      return a.a > b.a ? a : b;
+    }
+
+    // Now and then a pod of two or three dolphins comes through the bay,
+    // leaping as it goes: at no set time, in no set place, and sometimes
+    // not for minutes. Each is drawn only where it is out of the water,
+    // with spray where it breaks the surface and where it dives back in.
+    vec4 dolphins(vec2 px) {
+      float slot = 38.0, n = floor(time / slot);
+      vec4 c = vec4(0.0);
+      for (int j = 0; j < 2; j++) {
+        float m = n - float(j);
+        if (hash(vec2(m, 2.2)) > 0.55) continue;
+        float start = (m + 0.6 * hash(vec2(m, 3.3))) * slot;
+        float dir = hash(vec2(m, 4.4)) > 0.5 ? 1.0 : -1.0;
+        vec2 home = vec2(150.0 + 750.0 * hash(vec2(m, 5.5)), 405.0 + 55.0 * hash(vec2(m, 6.6)));
+        if (abs(px.x - home.x) > 200.0 || abs(px.y - home.y) > 40.0) continue;
+        float k = 0.6 + 1.6 * clamp((home.y - horizon * art.y) / (art.y - horizon * art.y), 0.0, 1.0);
+        for (int f = 0; f < 3; f++) {
+          float fi = float(f);
+          if (f == 2 && hash(vec2(m, 7.7)) > 0.5) break;
+          float t = time - start - fi * 0.45;
+          if (t < 0.0 || t > 4.0 * 1.7) continue;
+          float leap = floor(t / 1.7), u = fract(t / 1.7) / 0.65;
+          float sea = home.y + fi * 3.0 * k;
+          float x0 = home.x + dir * ((leap * 30.0 - fi * 7.0) * k);
+          for (int e = 0; e < 2; e++) {
+            float since = e == 0 ? u : u - 1.0;
+            if (since < 0.0 || since > 0.45) continue;
+            vec2 v = (px - vec2(x0 + dir * float(e) * 24.0 * k, sea - 1.0)) / k;
+            float spray = exp(-(v.x * v.x / 9.0 + v.y * v.y / 2.5)) * (1.0 - since / 0.45);
+            c += vec4(vec3(0.95, 0.97, 1.0), 1.0) * spray * 0.75 * (1.0 - c.a);
+          }
+          if (u > 1.0) continue;
+          float rise = 4.0 * u * (1.0 - u) * 9.0 * k;
+          vec2 mid = vec2(x0 + dir * u * 24.0 * k, sea - rise);
+          float tilt = atan(-(1.0 - 2.0 * u) * 36.0, 24.0) * 0.85 * dir;
+          vec2 q = (px - mid) / k;
+          q = vec2(q.x * cos(tilt) + q.y * sin(tilt), -q.x * sin(tilt) + q.y * cos(tilt));
+          q.x *= dir;
+          float th = 1.7 * sqrt(max(0.0, 1.0 - q.x * q.x / 42.0)) * (q.x > 0.0 ? 1.0 - 0.25 * q.x / 6.5 : 1.0);
+          float body = th > 0.0 ? cover((th - abs(q.y + 0.1)) * k) * cover((6.5 - abs(q.x)) * k) : 0.0;
+          float top = -th - 2.4 * clamp(1.0 - (q.x + 1.5) / 2.5, 0.0, 1.0);
+          float fin = cover((q.y - top) * k) * cover((q.x + 1.5) * k) * cover((1.0 - q.x) * k) * cover(-q.y * k);
+          float a = max(body, fin) * cover(sea - px.y);
+          c = over(c, mix(vec3(0.24, 0.29, 0.37), vec3(0.62, 0.64, 0.68), smoothstep(0.3, 1.2, q.y)), a);
+        }
+      }
+      return c;
+    }
+
+    // Smoke from a chimney at c (x, y and size, in the painting), rising in
+    // puffs and bent over by the wind as it was when the smoke left it.
+    float smoke(vec2 px, vec3 c) {
+      vec2 p = (px - c.xy) / c.z;
+      float up = -p.y;
+      if (up < 0.0 || up > 70.0 || abs(p.x) > 90.0) return 0.0;
+      float lean = gustAt(c.x / art.x, time - up * 0.05) + wind;
+      float mid = -(0.4 + 1.6 * lean) * pow(up, 1.35) * 0.12 + sin(up * 0.12 - time * 0.9) * up * 0.04;
+      float w = 1.0 + up * 0.16;
+      float puff = noise(vec2(p.x * 0.18, (up - time * 7.0) * 0.14)) * 0.6
+        + noise(vec2(p.x * 0.4 + 3.0, (up - time * 9.0) * 0.3)) * 0.4;
+      float x = (p.x - mid) / w;
+      return exp(-x * x) * smoothstep(0.0, 4.0, up) * exp(-up / 32.0) * smoothstep(0.2, 0.65, puff);
+    }
+
+    void main() {
+      vec2 css = vec2(gl_FragCoord.x, res.y - gl_FragCoord.y) / dpr;
+      vec2 uv = (css - fit.xy) / fit.zw;
+      vec2 px = uv * art;
+      vec4 zone = texture2D(zones, uv);
+      float wnd = gust(uv.x);
+      vec2 at = uv;
+      vec3 shine = vec3(0.0);
+
+      // The cypresses bend with the wind, most at the top.
+      if (zone.a > 0.003) at.x += zone.a * (wnd * 4.0 + sin(time * 1.4 + uv.x * 40.0) * 0.8) / art.x;
+
+      // The sea, seen in perspective: ripples small and packed near the
+      // horizon, wider close by, all rolling in toward the shore, rougher
+      // where a gust is passing.
+      if (zone.r > 0.003) {
+        float d = clamp((uv.y - horizon) / (1.0 - horizon), 0.0, 1.0);
+        float far = 1.0 / (d + 0.2);
+        vec2 w = vec2((uv.x - 0.5) * far * 9.0, far * 3.2);
+        float a = fbm(w + vec2(time * 0.07, time * 0.45));
+        float b = fbm(w * 1.7 + vec2(5.2, 1.3) - vec2(time * 0.11, time * 0.3));
+        float rough = 0.75 + 0.5 * wnd;
+        at += (vec2(a, b) - 0.5) * vec2(0.004, 0.007) * (0.15 + 0.85 * d) * rough * zone.r;
+        float crest = smoothstep(0.6, 0.78, a * 0.6 + b * 0.4) * rough;
+
+        // Rings where the pointer touched the water
+        vec2 push = vec2(0.0);
+        float ringing = 0.0;
+        for (int i = 0; i < 6; i++) {
+          float age = time - drops[i].z;
+          if (age < 0.0 || age > 3.5) continue;
+          vec2 shove = vec2(0.0);
+          ringing += ring(css - drops[i].xy, age, 40.0, d, shove) * drops[i].w;
+          push += shove * drops[i].w;
+        }
+        // and small ones where a fish came up, here and there, now and then
+        for (int i = 0; i < 4; i++) {
+          float fi = float(i), span = 2.3 + 1.7 * hash(vec2(fi, 0.7));
+          float n = floor((time + fi * 5.1) / span);
+          float age = time + fi * 5.1 - (n + 0.5 * hash(vec2(fi, n))) * span;
+          if (age < 0.0 || age > 2.5 || hash(vec2(fi, n + 0.5)) > 0.6) continue;
+          vec2 rise = vec2(60.0 + 1450.0 * hash(vec2(fi, n + 0.1)), 392.0 + 100.0 * hash(vec2(fi, n + 0.2)));
+          vec2 shove = vec2(0.0);
+          ringing += ring(css - (fit.xy + rise / art * fit.zw), age, 22.0, d, shove) * 0.4;
+          push += shove * 0.4;
+        }
+        at += push * 2.4 / fit.zw * zone.r;
+        shine = vec3(1.0, 0.98, 0.93) * (crest * 0.08 * d + max(0.0, ringing) * 0.12) * zone.r * (1.0 - 0.8 * night);
+      }
+
+      // The clouds drift on the wind. Two copies of the sky slide along,
+      // each fading out as it wraps back, so the drift never jumps. The
+      // hand-over is kept short, since the two copies show a cloud's edge
+      // twice while it lasts.
+      vec3 col = texture2D(img, at).rgb;
+      if (zone.g > 0.003) {
+        float cycle = time / 18.0;
+        float p0 = fract(cycle), p1 = fract(cycle + 0.5);
+        vec2 q = uv * vec2(3.0, 6.0);
+        vec2 drift = (vec2(-0.006, 0.0) + (vec2(noise(q + time * 0.02), noise(q + vec2(8.3, 2.1) - time * 0.015)) - 0.5)
+          * vec2(0.004, 0.0015)) * zone.g;
+        vec3 a = texture2D(img, at - drift * p0).rgb, b = texture2D(img, at - drift * p1).rgb;
+        // The cypresses and towers that reach above the skyline hold still.
+        col = mix(col, mix(a, b, smoothstep(0.3, 0.7, abs(2.0 * p0 - 1.0))), airy(col) * airy(a) * airy(b));
+      }
+
+      // Leaves rustle, more in a gust, and the olives turn up the silver
+      // undersides of theirs. Only leaves move, and only onto other leaves.
+      float green = zone.b * (1.0 - zone.r) * leafy(col);
+      if (green > 0.01) {
+        vec2 jit = vec2(noise(px * 0.18 + vec2(time * 2.3, 0.0)), noise(px * 0.18 + vec2(3.1, time * 2.0))) - 0.5;
+        vec2 off = (jit * (0.6 + 1.8 * wnd) + vec2(wnd * 0.8, 0.0)) / art;
+        vec3 moved = texture2D(img, at + off).rgb;
+        float keep = green * leafy(moved);
+        col = mix(col, moved, keep);
+        float flip = smoothstep(0.6, 0.9, noise(px * 0.35 + vec2(time * 3.0, time * 1.3)));
+        col += vec3(0.86, 0.9, 0.82) * flip * keep * (0.04 + 0.12 * wnd) * (1.0 - night);
+      }
+
+      // The shadows of the clouds pass over the land and the water.
+      float shade = smoothstep(0.52, 0.72, fbm(uv * vec2(3.0, 9.0) + vec2(time * 0.012, 0.0)));
+      col *= 1.0 - 0.1 * shade * (1.0 - zone.g) * (1.0 - night);
+      col += shine;
+
+      // The boat, its wake and its reflection
+      if (boat.w > 0.0) {
+        vec2 p = (px - boat.xy) / boat.z;
+        if (abs(p.x) < 170.0 && p.y > -30.0 && p.y < 34.0) {
+          float behind = p.x - 8.0;
+          if (behind > 0.0 && p.y > -1.0) {
+            float wide = 1.0 + behind * 0.045;
+            float foam = exp(-behind / 55.0) * (1.0 - smoothstep(0.0, wide, abs(p.y - 0.8 - behind * 0.02)))
+              * smoothstep(0.25, 0.75, noise(vec2(px.x / boat.z * 0.3 + time * 1.5, p.y * 1.2)));
+            col += vec3(0.95, 0.97, 1.0) * foam * 0.35 * boat.w * zone.r * (1.0 - 0.6 * night);
+          }
+          if (p.y > 0.5) {
+            vec2 m = vec2(p.x + sin(p.y * 0.9 - time * 3.0) * min(1.0, p.y / 4.0) * 1.3, 1.0 - p.y);
+            vec4 r = boatShape(m) * 0.4 * (1.0 - smoothstep(4.0, 28.0, p.y)) * boat.w * zone.r;
+            col = col * (1.0 - r.a) + r.rgb * 0.85;
+          }
+          vec4 c = boatShape(p) * boat.w;
+          col = col * (1.0 - c.a) + c.rgb;
+        }
+      }
+
+      vec4 pod = dolphins(px);
+      col = col * (1.0 - pod.a) + pod.rgb;
+
+      float fume = max(max(smoke(px, vec3(1863.0, 296.0, 1.0)), smoke(px, vec3(2077.0, 246.0, 1.1))),
+        smoke(px, vec3(1376.0, 364.0, 0.6)));
+      col = mix(col, vec3(0.9, 0.9, 0.92), min(1.0, fume * 0.8) * (1.0 - 0.7 * night));
+
+      float horizonY = fit.y + horizon * fit.w;
+      if (css.y < horizonY && night < 0.9) {
+        float bird = 0.0;
+        for (int i = 0; i < 6; i++) bird = max(bird, gull(css, float(i), horizonY));
+        col = mix(col, vec3(0.16, 0.17, 0.22), bird * 0.78 * (1.0 - night));
+      }
+      if (night < 0.95) {
+        for (int i = 0; i < 6; i++) {
+          vec4 l = leaf(css, float(i));
+          col = mix(col, l.rgb, l.a * (1.0 - night));
+        }
+      }
+      gl_FragColor = vec4(col, 1.0);
+    }`;
+
+  // The cypresses that bend in the wind, in the painting: where each stands,
+  // the top and foot of the part that moves, and how wide it is.
+  const CYPRESSES = [[2117, 140, 330, 14], [2157, 165, 320, 12], [1946, 215, 320, 10], [1992, 218, 300, 8],
+    [2052, 195, 262, 6], [2066, 205, 262, 6], [1920, 255, 312, 7], [1971, 236, 315, 7], [1622, 350, 392, 6], [1402, 355, 390, 5]];
+  // Where the sea, the sky, the leaves that can rustle and the cypresses
+  // are, each painted white on black at half the painting's size, softened,
+  // and kept in a channel of its own, so the motion fades out at the edges.
+  const paintZones = () => {
+    const w = PAINTING[0] / 2, h = PAINTING[1] / 2;
+    const c = document.createElement("canvas");
+    c.width = w;
+    c.height = h;
+    const g = c.getContext("2d", { willReadFrequently: true });
+    const zones = new ImageData(w, h);
+    // Shapes that reach the edge of the painting run past it, so the
+    // softening doesn't fade them there.
+    const out = (x, y) => [x <= 0 ? -40 : x >= PAINTING[0] ? PAINTING[0] + 40 : x, y >= PAINTING[1] ? PAINTING[1] + 40 : y];
+    const shape = (points) => {
+      g.beginPath();
+      points.forEach(([x, y]) => g.lineTo(...out(x, y)));
+      g.fill();
+    };
+    const zone = (channel, draw) => {
+      g.setTransform(1, 0, 0, 1, 0, 0);
+      g.filter = "none";
+      g.globalCompositeOperation = "source-over";
+      g.fillStyle = "#000";
+      g.fillRect(0, 0, w, h);
+      g.setTransform(0.5, 0, 0, 0.5, 0, 0);
+      g.filter = "blur(3px)";
+      g.fillStyle = "#fff";
+      draw();
+      const px = g.getImageData(0, 0, w, h).data;
+      for (let i = 0; i < px.length; i += 4) zones.data[i + channel] = px[i];
+    };
+    zone(0, () => shape(SEA.map(([u, v]) => [u * PAINTING[0], v * PAINTING[1]])));
+    zone(1, () => shape([...SKYLINE.map(([x, y]) => [x, y - 8]), [PAINTING[0], -40], [0, -40]]));
+    // The headland and the village, below the hills behind them
+    zone(2, () => shape([[1120, 335], [1440, 340], [1700, 330], [1790, 240], [1880, 110], [PAINTING[0], 90],
+      [PAINTING[0], PAINTING[1]], [1120, PAINTING[1]]]));
+    // Each cypress sways from its foot, the top furthest.
+    zone(3, () => {
+      g.globalCompositeOperation = "lighten";
+      g.filter = "blur(2px)";
+      CYPRESSES.forEach(([x, top, foot, half]) => {
+        const bend = g.createLinearGradient(0, top - 8, 0, foot);
+        bend.addColorStop(0, "#fff");
+        bend.addColorStop(0.5, "#404040");
+        bend.addColorStop(1, "#000");
+        g.fillStyle = bend;
+        g.fillRect(x - half - 10, top - 12, (half + 10) * 2, foot - top + 12);
+      });
+    });
+    return zones;
+  };
+  let paintVars = null, paintTexture = null, paintReady = false;
+  const texture = (unit, source, format = gl.RGB) => {
+    const t = gl.createTexture();
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, t);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+    if (source) gl.texImage2D(gl.TEXTURE_2D, 0, format, format, gl.UNSIGNED_BYTE, source);
+    return t;
+  };
+  const setUpPaint = () => {
+    const prog = gl.createProgram();
+    [[gl.VERTEX_SHADER, PAINT_VERT], [gl.FRAGMENT_SHADER, PAINT_FRAG]].forEach(([type, src]) => {
+      const sh = gl.createShader(type);
+      gl.shaderSource(sh, src);
+      gl.compileShader(sh);
+      gl.attachShader(prog, sh);
+    });
+    gl.bindAttribLocation(prog, 0, "p");
+    gl.linkProgram(prog);
+    if (!gl.getProgramParameter(prog, gl.LINK_STATUS)) return false;
+    gl.useProgram(prog);
+    // One triangle that covers the whole canvas
+    gl.bindBuffer(gl.ARRAY_BUFFER, gl.createBuffer());
+    gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
+    gl.enableVertexAttribArray(0);
+    gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
+    paintVars = Object.fromEntries(["img", "zones", "res", "art", "fit", "boat", "drops", "dpr", "time", "night",
+      "horizon", "wind"].map((n) => [n, gl.getUniformLocation(prog, n)]));
+    texture(1, paintZones(), gl.RGBA);
+    gl.uniform1i(paintVars.zones, 1);
+    gl.uniform1f(paintVars.horizon, HORIZON / PAINTING[1]);
+    gl.uniform2f(paintVars.art, PAINTING[0], PAINTING[1]);
+    paintTexture = texture(0);
+    return true;
+  };
+  // The picture is uploaded again whenever the browser picks another size of it.
+  const startPaint = () => {
+    if (!gl || gl.isContextLost() || !bannerImg.complete || !bannerImg.naturalWidth) return;
+    if (!paintTexture && !setUpPaint()) return;
+    gl.activeTexture(gl.TEXTURE0);
+    gl.bindTexture(gl.TEXTURE_2D, paintTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, bannerImg);
+    paintReady = true;
+    wakeSky();
+  };
+  bannerImg.addEventListener("load", startPaint);
+  paint.addEventListener("webglcontextlost", (e) => {
+    e.preventDefault();
+    paintReady = false;
+    paintTexture = null;
+    landscape.classList.remove("is-painting");
+  });
+  paint.addEventListener("webglcontextrestored", startPaint);
+
+  // Rings on the water: where the pointer touched it, when, and how hard.
+  // Each is x, y in the banner, the time, and the strength; six at most.
+  const drops = new Float32Array(24).fill(-99);
+  let nextDrop = 0, lastDrop = null, windKick = 0, windKickAt = 0;
+  const windNow = (t) => windKick * Math.exp(-(t - windKickAt) * 0.7);
+  const drop = (e, strength) => {
+    if (reduced || !paintReady || !geo) return;
+    const b = landscape.getBoundingClientRect();
+    const x = e.clientX - b.left, y = e.clientY - b.top, t = e.timeStamp / 1000;
+    drops.set([x, y, t, strength], nextDrop * 4);
+    nextDrop = (nextDrop + 1) % 6;
+    lastDrop = [x, y, t];
+  };
+  landscape.addEventListener("pointerdown", (e) => drop(e, 1));
+  landscape.addEventListener("pointermove", (e) => {
+    if (e.pointerType !== "mouse" || drag) return;
+    const b = landscape.getBoundingClientRect();
+    const x = e.clientX - b.left, y = e.clientY - b.top, t = e.timeStamp / 1000;
+    if (!lastDrop) { lastDrop = [x, y, t]; return; }
+    const far = Math.hypot(x - lastDrop[0], y - lastDrop[1]);
+    if (far < 22) return;
+    const speed = far / Math.max(0.016, t - lastDrop[2]);
+    // A quick sweep is a gust of its own.
+    windKick = Math.min(1.2, windNow(t) + speed / 6000);
+    windKickAt = t;
+    drop(e, Math.min(1, 0.35 + speed / 1500));
+  });
+
+  // The same numbers every visit for the same moment, but no pattern to them
+  const chance = (n) => {
+    const x = Math.sin(n * 127.1 + 311.7) * 43758.5453;
+    return x - Math.floor(x);
+  };
+  // The boat crosses the bay from behind the headland to the far left, in
+  // two to three and a half minutes, keeping to a lane of its own each time,
+  // and the bay can be empty for up to two minutes in between.
+  const BOAT_LAP = 270;
+  let boatNow = null;
+  const boatAt = (time) => {
+    const n = Math.floor(time / BOAT_LAP);
+    const takes = 120 + 90 * chance(n);
+    const u = (time - n * BOAT_LAP - chance(n + 0.5) * (BOAT_LAP - takes)) / takes;
+    if (u < 0 || u > 1) return null;
+    return [960 - u * 1000, 420 + 26 * chance(n + 0.3) + Math.sin(time * 1.7) * 0.5, 0.8, Math.min(1, u * 14, (1 - u) * 14)];
+  };
+  // The boat's lamp at the masthead, and its broken trail on the water
+  const lantern = ([bx, by, k, fade], time, strength) => {
+    const [x, y] = at([bx + 0.5 * k, by - 26 * k]);
+    const [, wy] = at([bx, by]);
+    const a = strength * fade, s = geo.s;
+    pen.save();
+    pen.globalCompositeOperation = "lighter";
+    const r = s * 16;
+    const lamp = pen.createRadialGradient(x, y, 0, x, y, r);
+    lamp.addColorStop(0, `rgba(255,240,200,${(0.95 * a).toFixed(3)})`);
+    lamp.addColorStop(0.2, `rgba(255,190,110,${(0.4 * a).toFixed(3)})`);
+    lamp.addColorStop(1, "rgba(255,170,80,0)");
+    pen.fillStyle = lamp;
+    pen.fillRect(x - r, y - r, r * 2, r * 2);
+    const len = s * 36;
+    const trail = pen.createLinearGradient(0, wy, 0, wy + len);
+    trail.addColorStop(0, `rgba(255,205,135,${(0.55 * a).toFixed(3)})`);
+    trail.addColorStop(1, "rgba(255,205,135,0)");
+    pen.fillStyle = trail;
+    for (let i = 0; i < 6; i++) {
+      const half = s * 2.4 * (0.5 + 0.7 * Math.sin(time * 4.3 + i * 1.7) ** 2);
+      pen.fillRect(x - half + Math.sin(time * 2.3 + i) * s * 1.5, wy + 1 + (i * len) / 6, half * 2, len / 10);
+    }
+    pen.restore();
+  };
+
+  // Fireflies in the village gardens after dark, each drifting about a bush
+  // of its own and glowing when it likes. They go on the glow, above the
+  // night's tint, so they shine.
+  const FIREFLIES = Array.from({ length: 16 }, (_, i) => ({
+    home: [1700 + chance(i + 0.1) * 460, 340 + chance(i + 0.2) * 140],
+    f: [0.11 + chance(i + 0.3) * 0.2, 0.07 + chance(i + 0.4) * 0.17, 0.5 + chance(i + 0.5) * 0.9],
+    ph: chance(i + 0.6) * 40,
+  }));
+  const fireflies = (time, strength) => {
+    pen.save();
+    pen.globalCompositeOperation = "lighter";
+    for (const { home, f, ph } of FIREFLIES) {
+      const t = time + ph;
+      const blink = Math.max(0, Math.sin(t * f[2]) + 0.6 * Math.sin(t * f[2] * 2.7 + 1) - 0.7);
+      if (blink <= 0) continue;
+      const [x, y] = at([home[0] + 22 * Math.sin(t * f[0]) + 9 * Math.sin(t * f[1] * 3.1),
+        home[1] + 10 * Math.sin(t * f[1] + 2) + 5 * Math.sin(t * f[0] * 2.3)]);
+      const a = Math.min(1, blink * 1.4) * strength;
+      const r = Math.max(2.5, geo.s * 7);
+      const bug = pen.createRadialGradient(x, y, 0, x, y, r);
+      bug.addColorStop(0, `rgba(240,255,170,${a.toFixed(3)})`);
+      bug.addColorStop(0.25, `rgba(200,255,110,${(0.35 * a).toFixed(3)})`);
+      bug.addColorStop(1, "rgba(180,255,90,0)");
+      pen.fillStyle = bug;
+      pen.fillRect(x - r, y - r, r * 2, r * 2);
+    }
+    pen.restore();
+  };
+
+  // Draws the painting as it is at this moment, and says whether it moves.
+  const drawPaint = (time) => {
+    const on = paintReady && !reduced;
+    landscape.classList.toggle("is-painting", on);
+    if (!on) {
+      boatNow = null;
+      return false;
+    }
+    boatNow = boatAt(time);
+    fit(paint, glow.width, glow.height);
+    gl.viewport(0, 0, paint.width, paint.height);
+    gl.uniform2f(paintVars.res, paint.width, paint.height);
+    gl.uniform4f(paintVars.fit, geo.ox, geo.oy, PAINTING[0] * geo.s, PAINTING[1] * geo.s);
+    gl.uniform4fv(paintVars.boat, boatNow || [0, 0, 1, 0]);
+    gl.uniform4fv(paintVars.drops, drops);
+    gl.uniform1f(paintVars.dpr, paint.width / geo.W);
+    gl.uniform1f(paintVars.time, time);
+    gl.uniform1f(paintVars.night, skyState.night);
+    gl.uniform1f(paintVars.wind, windNow(time));
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    return true;
+  };
+
   let skyFrame = 0, lastSky = 0, pathShown = 0, pathWanted = 0, skyOnScreen = true;
   let skyDirty = true, skyLive = true;
   // Draws one frame, and says whether anything in it moves on its own.
@@ -518,6 +1093,7 @@
     if (!geo || !st) return false;
     const { dpr, waterTop } = geo;
     const time = now / 1000;
+    const moving = drawPaint(time);
     if (waterDirty) paintWater();
     pen.setTransform(1, 0, 0, 1, 0, 0);
     pen.clearRect(0, 0, glow.width, glow.height);
@@ -534,6 +1110,9 @@
       pen.restore();
     }
 
+    if (boatNow && st.night > 0.15) lantern(boatNow, time, Math.min(1, st.night * 1.4 - 0.2));
+    if (moving && st.night > 0.3) fireflies(time, Math.min(1, st.night * 1.6 - 0.5));
+
     const beam = st.night > 0.08;
     if (beam) lighthouse(time, Math.min(1, st.night * 1.6 - 0.3));
 
@@ -547,7 +1126,7 @@
       fit(trail.canvas, 0, 0);
       trailDirty = true;
     }
-    return sunShine || moonShine || beam;
+    return sunShine || moonShine || beam || moving;
   };
   // The water and the lighthouse move all the time, at 30 frames a second,
   // and only while the banner is on screen. A frame that holds still is
@@ -581,6 +1160,7 @@
     skyOnScreen = e.isIntersecting;
     if (skyOnScreen) wakeSky();
   }).observe(landscape);
+  startPaint();
 
   // Minutes from now until the sun next crosses the horizon.
   const sunCrossing = (rising) => {
