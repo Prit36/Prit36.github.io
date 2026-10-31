@@ -91,8 +91,8 @@
   const tag = sky.querySelector(".orb-tag");
   const glow = sky.querySelector(".glow");
   const pen = glow.getContext("2d");
-  // The dotted orbit is cached; water and its reflections share the surface
-  // shader below, so every highlight travels with the wave that catches it.
+  // The dotted orbit is cached. The water shader keeps the underpainting
+  // fixed while carrying its fine reflection strokes with the swell.
   const layer = () => document.createElement("canvas").getContext("2d");
   const trail = layer();
   let trailDirty = true;
@@ -465,7 +465,7 @@
     #else
     precision mediump float;
     #endif
-    uniform sampler2D img, zones, clouds, coast;
+    uniform sampler2D img, zones, clouds, coast, underpaint;
     uniform vec2 res, art;
     uniform vec4 fit, boat;
     uniform float dpr, time, night, horizon, wind;
@@ -496,40 +496,30 @@
     float cover(float d) { return clamp(d * 0.8 + 0.5, 0.0, 1.0); }
     vec4 over(vec4 c, vec3 rgb, float a) { return c * (1.0 - a) + vec4(rgb, 1.0) * a; }
 
-    // A small directional gravity-wave spectrum. Height and its analytic
-    // derivatives are evaluated together: refraction, normals and reflected
-    // light describe one surface instead of unrelated animated textures.
-    // Short waves fade below a pixel footprint, particularly at the horizon.
+    // A sheltered bay: one family of long, low swells, with periods of
+    // roughly 7 to 13 seconds. Short unresolved waves contribute no movement.
+    // The swell only carries the surface detail; it does not bend the seabed.
     void swell(inout vec3 surface, vec2 q, vec2 dx, vec2 dy,
                vec2 direction, float k, float amplitude, float phase) {
       float footprint = k * length(vec2(dot(direction, dx), dot(direction, dy)));
       float resolved = 1.0 - smoothstep(0.65, 2.2, footprint);
       float a = amplitude * resolved;
-      float angle = dot(direction, q) * k - sqrt(9.81 * k) * time * 0.58 + phase;
-      float harmonic = 0.16 * (1.0 - smoothstep(0.35, 1.1, footprint));
-      float height = sin(angle) + harmonic * sin(2.0 * angle);
-      float slope = cos(angle) + 2.0 * harmonic * cos(2.0 * angle);
-      surface += vec3(height, direction * k * slope) * a;
+      float angle = dot(direction, q) * k - sqrt(9.81 * k) * time * 0.15 + phase;
+      surface += vec3(sin(angle), direction * k * cos(angle)) * a;
     }
 
     vec3 seaSurface(vec2 q, vec2 dx, vec2 dy, float breeze) {
       vec3 s = vec3(0.0);
-      // Long, slow swells cross at shallow angles. The wind only raises the
-      // smaller ripples; changing wind never jumps the phase of a wave.
-      swell(s, q, dx, dy, vec2( 0.242, -0.970), 1.13, 0.066, 0.4);
-      swell(s, q, dx, dy, vec2(-0.196, -0.981), 1.79, 0.042, 2.1);
-      swell(s, q, dx, dy, vec2( 0.514, -0.857), 2.87, 0.023, 4.7);
-      swell(s, q, dx, dy, vec2(-0.447, -0.894), 4.61, 0.013, 1.3);
-      float ripple = 0.75 + 0.4 * breeze;
-      swell(s, q, dx, dy, vec2( 0.371, -0.928),  7.17, 0.0070 * ripple, 5.8);
-      swell(s, q, dx, dy, vec2(-0.640, -0.768), 11.73, 0.0038 * ripple, 0.9);
-      swell(s, q, dx, dy, vec2( 0.707, -0.707), 18.31, 0.0021 * ripple, 3.6);
-      swell(s, q, dx, dy, vec2(-0.287, -0.958), 29.17, 0.0011 * ripple, 2.5);
+      swell(s, q, dx, dy, vec2( 0.080, -0.997), 1.13, 0.045, 0.4);
+      swell(s, q, dx, dy, vec2(-0.120, -0.993), 1.67, 0.024, 2.1);
+      swell(s, q, dx, dy, vec2( 0.243, -0.970), 2.53, 0.009, 4.7);
+      float ripple = 0.95 + 0.05 * min(breeze, 1.0);
+      swell(s, q, dx, dy, vec2( 0.371, -0.928), 3.83, 0.004 * ripple, 1.3);
       return s;
     }
 
-    // The reflected sky is broken by the actual surface slope. A broad lobe
-    // supplies the sheen, and a tighter lobe picks out occasional wavelets.
+    // A restrained change of sheen; most reflections already belong to the
+    // painting. High-contrast procedural crests would fight those strokes.
     vec3 seaLight(vec3 normal, vec3 view, vec2 uv, float depth, vec3 body, vec3 tint) {
       if (body.z < 0.002) return vec3(0.0);
       float elevation = clamp(body.y, 0.04, 1.3);
@@ -537,12 +527,19 @@
       vec3 halfway = normalize(view + light);
       float facing = max(0.0, dot(normal, halfway));
       float broad = pow(facing, 32.0);
-      float glint = pow(facing, 180.0);
+      float glint = pow(facing, 150.0);
       float width = 0.016 + depth * (0.16 + elevation * 0.08);
       float offset = (uv.x - body.x + normal.x * depth * 0.32) / width;
       float path = exp(-offset * offset);
       float grazing = 0.12 + 0.88 * pow(1.0 - max(0.0, dot(normal, view)), 3.0);
-      return tint * (broad * 0.10 + glint * 0.32) * path * body.z * (0.45 + grazing);
+      return tint * (broad * 0.035 + glint * 0.055) * path * body.z * (0.45 + grazing);
+    }
+
+    // Only the fine reflection strokes travel. Broad colour and most dark
+    // detail remain fixed, so submerged rocks do not turn into liquid.
+    vec3 seaDetail(vec2 uv) {
+      vec3 detail = texture2D(img, uv).rgb - texture2D(underpaint, uv).rgb;
+      return max(detail, 0.0) + min(detail, 0.0) * 0.22;
     }
 
     vec3 ocean(vec2 uv, vec3 original, float mask, float breeze) {
@@ -553,49 +550,41 @@
       vec2 dy = -q * perspective / (fit.w * dpr);
       vec3 surface = seaSurface(q, dx, dy, breeze);
       float shore = texture2D(coast, uv).r * 96.0;
-      float offshore = smoothstep(1.5, 22.0, shore);
-      float visible = smoothstep(0.0, 0.055, depth);
+      float offshore = smoothstep(3.0, 36.0, shore);
+      float visible = smoothstep(0.0, 0.045, depth);
 
-      // A few painting pixels of displacement, tapering to zero at land.
-      // A second mask lookup prevents a wave from pulling rock into the sea.
-      vec2 bend = vec2(surface.y * 9.0, -surface.x * 78.0 + surface.z * 3.0);
-      bend *= (0.24 + depth * 1.7) * visible * offshore;
-      vec2 sampleAt = uv + bend / art;
-      float safe = smoothstep(0.65, 0.98, texture2D(zones, sampleAt).r);
-      vec3 water = texture2D(img, mix(uv, sampleAt, safe)).rgb;
+      // Two overlapping 26-second flow windows carry the painted wavelets
+      // toward the viewer. Each resets while invisible. The small spatial
+      // phase offset prevents the whole bay from cross-fading in unison.
+      // Perspective compresses movement at the horizon. This is transport
+      // of surface detail, not oscillation of the entire painting.
+      float phase = fract(time / 26.0 + noise(uv * vec2(5.0, 8.0)) * 0.31);
+      float other = fract(phase + 0.5);
+      float weight = 1.0 - abs(phase * 2.0 - 1.0);
+      weight = weight * weight * (3.0 - 2.0 * weight);
+      float travel = min(54.0, 460.0 * pow(depth + 0.035, 1.6));
+      vec2 flow = vec2(travel * 0.14, travel) * visible * offshore;
+      vec2 orbit = vec2(surface.y * 2.0, surface.x * 14.0) * visible * offshore;
+      vec2 a = uv - (flow * (phase - 0.5) + orbit) / art;
+      vec2 b = uv - (flow * (other - 0.5) + orbit) / art;
+      a = mix(uv, a, smoothstep(0.8, 0.99, texture2D(zones, a).r));
+      b = mix(uv, b, smoothstep(0.8, 0.99, texture2D(zones, b).r));
+      vec3 base = texture2D(underpaint, uv).rgb;
+      vec3 fixedDetail = min(original - base, 0.0) * 0.78;
+      vec3 water = base + fixedDetail + mix(seaDetail(b), seaDetail(a), weight);
 
-      vec3 normal = normalize(vec3(-surface.y * 1.55, 1.0, -surface.z * 1.55));
+      vec3 normal = normalize(vec3(-surface.y * 0.9, 1.0, -surface.z * 0.9));
       vec3 view = normalize(vec3(0.0, 0.14 + depth * 1.5, -1.0));
-      float fresnel = 0.025 + 0.975 * pow(1.0 - max(0.0, dot(normal, view)), 5.0);
-      float slopeLight = dot(normal, normalize(vec3(-0.35, 0.75, -0.55)));
-      float flatLight = 0.75 / length(vec3(-0.35, 0.75, -0.55));
-      water *= 1.0 + (slopeLight - flatLight) * 0.65 * visible;
-      // Keep the painted blues and visible seabed; just lift the faces that
-      // turn toward the sky. No uniform white lines or noise-driven flashes.
-      vec3 skyReflection = vec3(0.39, 0.67, 0.79);
-      water = mix(water, skyReflection, fresnel * 0.11 * visible);
-      float crest = smoothstep(0.015, 0.105, surface.x) * smoothstep(-0.12, 0.16, -surface.z);
-      water += vec3(0.075, 0.12, 0.13) * crest * visible * (0.65 + depth);
       vec3 reflection = seaLight(normal, view, uv, depth, sunLight, sunColor)
         + seaLight(normal, view, uv, depth, moonLight, vec3(0.75, 0.85, 1.0));
       water += reflection * (1.0 - water) * visible;
-
-      // Small, broken wash follows the actual coastline. Successive sets
-      // approach land, thin out and dissolve; the horizon never gets foam.
-      float along = noise(uv * vec2(180.0, 55.0));
-      float washPhase = shore * 0.20 + time * 0.82 + along * 1.5;
-      float wash = pow(max(0.0, cos(washPhase)), 12.0);
-      float broken = smoothstep(0.28, 0.72, noise(q * vec2(3.2, 1.5) + vec2(0.0, time * 0.12)));
-      float shallows = (1.0 - smoothstep(5.0, 42.0, shore)) * smoothstep(0.0, 4.0, shore);
-      float foam = wash * broken * shallows * visible * 0.17;
-      water = mix(water, vec3(0.80, 0.90, 0.86), foam);
-      return mix(original, water, mask);
+      return mix(original, clamp(water, 0.0, 1.0), mask);
     }
 
     // The boat, in painting pixels from the middle of its waterline. It runs
     // before the wind, to the left, heeling a little on the swell.
     vec4 boatShape(vec2 p) {
-      vec2 s = vec2(p.x + p.y * 0.05 * sin(time * 1.1), p.y);
+      vec2 s = vec2(p.x + p.y * 0.035 * sin(time * 0.5), p.y);
       float mast = cover(0.5 - abs(s.x - 0.5)) * cover(-3.0 - s.y) * cover(s.y + 26.0);
       float sail = cover(s.x - 1.0) * cover(-5.0 - s.y) * cover((1.0 + (s.y + 25.0) * 0.45 - s.x) * 0.91);
       float jib = cover(-s.x) * cover(-4.5 - s.y) * cover((s.x + (s.y + 23.0) * 0.432) * 0.918);
@@ -732,7 +721,7 @@
             col = mix(col, col * 1.08 + 0.03, slick * 0.6 * boat.w * zone.r * (1.0 - 0.6 * night));
           }
           if (p.y > 0.5) {
-            vec2 m = vec2(p.x + sin(p.y * 0.5 - time * 1.6) * min(1.0, p.y / 6.0) * 0.6, 1.0 - p.y);
+            vec2 m = vec2(p.x + sin(p.y * 0.5 - time * 0.5) * min(1.0, p.y / 6.0) * 0.4, 1.0 - p.y);
             vec4 r = boatShape(m) * 0.4 * (1.0 - smoothstep(4.0, 28.0, p.y)) * boat.w * zone.r;
             col = col * (1.0 - r.a) + r.rgb * 0.85;
           }
@@ -897,7 +886,42 @@
     }
     return sky;
   };
-  let paintVars = null, paintTexture = null, cloudTexture = null, paintReady = false;
+  // Separate the painting's broad colour from its fine reflection strokes.
+  // Padding repeats the edge pixels so the blur cannot introduce dark seams.
+  // Generated on image load only; there is no per-frame image processing.
+  const waterUnderpaint = () => {
+    const [w, h] = PAINTING, pad = 24;
+    const source = document.createElement("canvas");
+    source.width = w + pad * 2;
+    source.height = h + pad * 2;
+    const g = source.getContext("2d");
+    g.drawImage(bannerImg, pad, pad, w, h);
+    g.drawImage(source, pad, pad, 1, h, 0, pad, pad, h);
+    g.drawImage(source, pad + w - 1, pad, 1, h, pad + w, pad, pad, h);
+    g.drawImage(source, 0, pad, source.width, 1, 0, 0, source.width, pad);
+    g.drawImage(source, 0, pad + h - 1, source.width, 1, 0, pad + h, source.width, pad);
+    const base = document.createElement("canvas");
+    base.width = w;
+    base.height = h;
+    const soft = base.getContext("2d");
+    if ("filter" in soft) {
+      soft.filter = "blur(6px)";
+      soft.drawImage(source, -pad, -pad);
+    } else {
+      // Some canvas implementations lack filters. A downsampled base still
+      // separates the fine detail, keeping the same animation path available.
+      const small = document.createElement("canvas");
+      small.width = Math.ceil(w / 12);
+      small.height = Math.ceil(h / 12);
+      const sampler = small.getContext("2d");
+      sampler.imageSmoothingQuality = "high";
+      sampler.drawImage(bannerImg, 0, 0, small.width, small.height);
+      soft.imageSmoothingQuality = "high";
+      soft.drawImage(small, 0, 0, w, h);
+    }
+    return base;
+  };
+  let paintVars = null, paintTexture = null, cloudTexture = null, underpaintTexture = null, paintReady = false;
   const texture = (unit, source, format = gl.RGB) => {
     const t = gl.createTexture();
     gl.activeTexture(gl.TEXTURE0 + unit);
@@ -939,7 +963,7 @@
     gl.bufferData(gl.ARRAY_BUFFER, new Float32Array([-1, -1, 3, -1, -1, 3]), gl.STATIC_DRAW);
     gl.enableVertexAttribArray(0);
     gl.vertexAttribPointer(0, 2, gl.FLOAT, false, 0, 0);
-    paintVars = Object.fromEntries(["img", "zones", "clouds", "coast", "res", "art", "fit", "boat", "dpr", "time", "night",
+    paintVars = Object.fromEntries(["img", "zones", "clouds", "coast", "underpaint", "res", "art", "fit", "boat", "dpr", "time", "night",
       "horizon", "wind", "sunLight", "moonLight", "sunColor"].map((n) => [n, gl.getUniformLocation(prog, n)]));
     texture(1, paintZones(), gl.RGBA);
     gl.uniform1i(paintVars.zones, 1);
@@ -947,6 +971,8 @@
     gl.uniform1i(paintVars.clouds, 2);
     texture(3, paintCoast(), gl.RGBA);
     gl.uniform1i(paintVars.coast, 3);
+    underpaintTexture = texture(4);
+    gl.uniform1i(paintVars.underpaint, 4);
     gl.uniform1f(paintVars.horizon, HORIZON / PAINTING[1]);
     gl.uniform2f(paintVars.art, PAINTING[0], PAINTING[1]);
     paintTexture = texture(0);
@@ -962,6 +988,9 @@
     gl.activeTexture(gl.TEXTURE2);
     gl.bindTexture(gl.TEXTURE_2D, cloudTexture);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA, gl.RGBA, gl.UNSIGNED_BYTE, driftingSky());
+    gl.activeTexture(gl.TEXTURE4);
+    gl.bindTexture(gl.TEXTURE_2D, underpaintTexture);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGB, gl.RGB, gl.UNSIGNED_BYTE, waterUnderpaint());
     paintReady = true;
     wakeSky();
   };
@@ -1004,7 +1033,7 @@
     const takes = 120 + 90 * chance(n);
     const u = (time - n * BOAT_LAP - chance(n + 0.5) * (BOAT_LAP - takes)) / takes;
     if (u < 0 || u > 1) return null;
-    return [960 - u * 1000, 420 + 26 * chance(n + 0.3) + Math.sin(time * 1.7) * 0.5, 0.8, Math.min(1, u * 14, (1 - u) * 14)];
+    return [960 - u * 1000, 420 + 26 * chance(n + 0.3) + Math.sin(time * 0.5) * 0.35, 0.8, Math.min(1, u * 14, (1 - u) * 14)];
   };
   // The boat's lamp at the masthead, and its broken trail on the water
   const lantern = ([bx, by, k, fade], time, strength) => {
