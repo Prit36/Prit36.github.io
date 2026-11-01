@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&display=swap">
-  <link rel="stylesheet" href="style.css?v=sky-8">
+  <link rel="stylesheet" href="style.css?v=sky-11">
   <script>try { var t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
 </head>
 <body>
@@ -25,6 +25,12 @@
          sizes="100vw" width="2172" height="724" alt="" fetchpriority="high">
     <p class="sky-note mono" id="sky-note"></p>
   </div>
+  <button class="lights wide" id="wide" type="button" aria-label="Show the whole painting" aria-pressed="false" title="Whole painting (F)">
+    <svg viewBox="0 0 24 24" aria-hidden="true">
+      <path class="i-open" d="M14 4h6v6M20 4l-6 6M10 20H4v-6M4 20l6-6"/>
+      <path class="i-fold" d="M20 10h-6V4M14 10l6-6M4 14h6v6M10 14l-6 6"/>
+    </svg>
+  </button>
   <button class="lights" id="lights" type="button" aria-label="Turn the lights off">
     <svg viewBox="0 0 24 24" aria-hidden="true">
       <mask id="lights-cut"><rect x="-4" y="-4" width="32" height="32" fill="#fff"/><circle class="cut" cx="26" cy="4" r="7" fill="#000"/></mask>
@@ -191,6 +197,6 @@
   </main>
 
   <script src="data.js"></script>
-  <script src="main.js?v=sky-5"></script>
+  <script src="main.js?v=sky-7"></script>
 </body>
 </html>

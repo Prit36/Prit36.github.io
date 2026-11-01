@@ -212,6 +212,33 @@
   const skyObserver = new ResizeObserver(placeSky);
   skyObserver.observe(landscape);
 
+  // The whole painting. The banner opens out to the painting's own shape and
+  // the page slides down under it; folding it back keeps the page cut until
+  // the banner is a strip again, so a scrollbar never flashes in between.
+  const wideBtn = document.getElementById("wide");
+  let folding = 0;
+  const isWide = () => root.classList.contains("is-wide");
+  const setWide = (on) => {
+    if (on === isWide()) return;
+    clearTimeout(folding);
+    root.classList.toggle("is-wide", on);
+    root.classList.toggle("is-folding", !on);
+    wideBtn.setAttribute("aria-pressed", String(on));
+    wideBtn.setAttribute("aria-label", on ? "Fold the painting back" : "Show the whole painting");
+    folding = setTimeout(() => {
+      root.classList.remove("is-folding");
+      scheduleNameMeasure();
+    }, reduced ? 0 : 650);
+  };
+  const toggleWide = () => setWide(!isWide());
+  wideBtn.addEventListener("click", toggleWide);
+  document.addEventListener("keydown", (e) => {
+    if (e.defaultPrevented || e.ctrlKey || e.metaKey || e.altKey
+      || e.target.closest?.("input, textarea, [contenteditable], dialog")) return;
+    if (e.key === "Escape") setWide(false);
+    else if (e.key === "f" || e.key === "F") toggleWide();
+  });
+
   // The sun over Surat: its altitude, and its hour angle (0 at solar noon),
   // both in degrees. Close enough to light a painting.
   const RAD = Math.PI / 180;
@@ -1610,6 +1637,7 @@
   const play = () => {
     if (document.hidden) return;
     stopRide();
+    setWide(false);
     const sound = openSound();
     // Notes are scheduled on the audio clock; the picture follows the page clock,
     // so it still runs if the browser keeps the sound off.
@@ -1962,6 +1990,7 @@
   const startRide = () => {
     if (riding || document.hidden || !rows.length) return;
     closePalette();
+    setWide(false);
     stop();
     leaveCareer();
     reset();
@@ -2046,7 +2075,8 @@
     { group: "Play", label: "Skip to sunrise", hint: "sky", run: () => skyTo(sunCrossing(true) - 12) },
     { group: "Play", label: "Bring the sky back to now", hint: "sky", run: skyHome, when: () => Math.round(skew) !== 0 },
     { group: "Page", label: () => (isDark() ? "Lights on" : "Lights off"), hint: "theme", run: () => toggleTheme(lightsBtn) },
-    { group: "Page", label: "Show experience", hint: "since 2023", run: () => { careerBtn.click(); } },
+    { group: "Page", label: () => (isWide() ? "Fold the painting back" : "See the whole painting"), hint: "F", run: toggleWide, when: () => getComputedStyle(wideBtn).display !== "none" },
+    { group: "Page", label: "Show experience", hint: "since 2023", run: () => { setWide(false); careerBtn.click(); } },
     { group: "Page", label: "Copy email address", hint: "pprit362@gmail.com", run: () => copyBtn.click() },
     { group: "Elsewhere", label: "Email me", hint: "mailto", run: () => go("mailto:pprit362@gmail.com") },
     { group: "Elsewhere", label: "GitHub", hint: "Prit36", run: () => go("https://github.com/Prit36") },
