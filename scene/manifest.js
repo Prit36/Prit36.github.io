@@ -18,6 +18,37 @@ export default {
     "stretch": 3,
     "shoreReach": 24
   },
+  "trees": [
+    { "kind": "cypress", "base": [2121, 316], "top": [2119, 136], "length": 180.0, "root": 70 },
+    { "kind": "cypress", "base": [2156, 318], "top": [2155, 164], "length": 154.0, "root": 70 },
+    { "kind": "cypress", "base": [2052, 248], "top": [2053, 193], "length": 55.0, "root": 40 },
+    { "kind": "cypress", "base": [2064, 250], "top": [2064, 204], "length": 46.0, "root": 40 },
+    { "kind": "broadleaf", "base": [2086, 254], "top": [2086, 220], "length": 34.0, "root": 30 },
+    { "kind": "cypress", "base": [1992, 318], "top": [1993, 218], "length": 100.0, "root": 30 },
+    { "kind": "cypress", "base": [1972, 318], "top": [1972, 241], "length": 77.0, "root": 30 },
+    { "kind": "cypress", "base": [1946, 318], "top": [1946, 216], "length": 102.0, "root": 30 },
+    { "kind": "cypress", "base": [1920, 300], "top": [1920, 258], "length": 42.0, "root": 30 },
+    { "kind": "broadleaf", "base": [1897, 304], "top": [1897, 274], "length": 30.0, "root": 20 },
+    { "kind": "olive", "base": [2138, 496], "top": [2096, 328], "length": 173.5, "root": 0 },
+    { "kind": "broadleaf", "base": [2050, 370], "top": [2050, 304], "length": 66.0, "root": 30 },
+    { "kind": "bush", "base": [2020, 438], "top": [2018, 362], "length": 76.0, "root": 0 },
+    { "kind": "bush", "base": [2052, 516], "top": [2054, 464], "length": 52.0, "root": 0 },
+    { "kind": "bush", "base": [2092, 654], "top": [2104, 545], "length": 109.7, "root": 0 },
+    { "kind": "bush", "base": [1945, 466], "top": [1945, 412], "length": 54.0, "root": 0 },
+    { "kind": "pine", "base": [1798, 346], "top": [1801, 286], "length": 60.1, "root": 0 },
+    { "kind": "broadleaf", "base": [1735, 392], "top": [1735, 324], "length": 68.0, "root": 0 },
+    { "kind": "broadleaf", "base": [1863, 401], "top": [1861, 364], "length": 37.1, "root": 0 },
+    { "kind": "cypress", "base": [1625, 382], "top": [1625, 352], "length": 30.0, "root": 0 },
+    { "kind": "broadleaf", "base": [1608, 402], "top": [1605, 366], "length": 36.1, "root": 0 },
+    { "kind": "pine", "base": [1206, 361], "top": [1206, 345], "length": 16.0, "root": 6 },
+    { "kind": "pine", "base": [1260, 361], "top": [1260, 342], "length": 19.0, "root": 6 },
+    { "kind": "pine", "base": [1298, 361], "top": [1300, 348], "length": 13.2, "root": 6 },
+    { "kind": "cypress", "base": [1405, 389], "top": [1405, 354], "length": 35.0, "root": 0 },
+    { "kind": "bush", "base": [1353, 374], "top": [1355, 351], "length": 23.1, "root": 0 },
+    { "kind": "bush", "base": [1782, 432], "top": [1789, 411], "length": 22.1, "root": 0 },
+    { "kind": "bush", "base": [1959, 472], "top": [1974, 448], "length": 28.3, "root": 0 },
+    { "kind": "bush", "base": [1959, 531], "top": [1978, 498], "length": 38.1, "root": 0 }
+  ],
   "textures": {
     "mattes": {
       "url": "assets/scene/mattes.png",
@@ -32,9 +63,8 @@ export default {
       "width": 1086,
       "height": 362,
       "format": "rgb",
-      "channels": ["waterShallow", "cloudDensity", "foliageFlex"],
-      "filter": "linear",
-      "foliageReach": 16
+      "channels": ["waterShallow", "cloudDensity", "unused"],
+      "filter": "linear"
     },
     "water": {
       "url": "assets/scene/water.png",
@@ -45,14 +75,15 @@ export default {
       "filter": "linear",
       "shoreDistance": "sqrt(metres / sea.shoreReach)"
     },
-    "groups": {
-      "url": "assets/scene/groups.png",
+    "trees": {
+      "url": "assets/scene/trees.png",
       "width": 1086,
       "height": 362,
-      "format": "r",
-      "channels": ["foliageGroup"],
-      "filter": "nearest",
-      "count": 32
+      "format": "rgb",
+      "channels": ["tree", "flex", "exposure"],
+      "filter": "linear",
+      "tree": "id, 1 to trees.length, read without filtering",
+      "reach": 16
     },
     "plate": {
       "url": "assets/scene/plate.webp",

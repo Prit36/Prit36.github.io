@@ -120,7 +120,7 @@ export class LandscapeScene {
     for (const id of [...this.motions.keys()]) if (!ids.includes(id)) this.motions.delete(id);
     for (const id of ids) {
       const { Motion } = SYSTEMS[id];
-      if (Motion && !this.motions.has(id)) this.motions.set(id, new Motion(this.environment.options.seed));
+      if (Motion && !this.motions.has(id)) this.motions.set(id, new Motion(this.environment.options.seed, this.manifest));
     }
     this.systems = ids;
     this.defines = defines;
@@ -310,7 +310,7 @@ export class LandscapeScene {
       this.#schedule();
     });
     on(this.reducedMotion, "change", () => {
-      // Back from reduced motion, the sea fades in again.
+      // Back from reduced motion, the sea and the trees fade in again.
       this.presence = 0;
       this.invalidate();
     });

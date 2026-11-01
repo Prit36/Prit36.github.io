@@ -10,16 +10,16 @@ Use case: stylized-concept. Asset type: original panoramic background banner for
 
 ## Scene layers
 
-`scene/` draws the banner with WebGL2 instead of the `<img>`, so parts of the painting can move on their own. So far only the sea does: swell and wind ripples, small waves breaking along the rocks and the beach, and a few glints where the painting already has sunlight on the water. It follows the shared wind, pauses when the banner is hidden or scrolled away, and holds still for reduced motion. Held still, it looks exactly like the `<img>`, which stays underneath as the fallback. `build_scene.py` derives the layers below from `coastal-banner.webp`, which it never changes; run it again whenever the painting changes. It needs numpy, pillow, scipy, scikit-image, scikit-learn and opencv-python-headless.
+`scene/` draws the banner with WebGL2 instead of the `<img>`, so parts of the painting can move on their own. So far the sea and the trees do. The sea has swell and wind ripples, small waves breaking along the rocks and the beach, and a few glints where the painting already has sunlight on the water. The trees and bushes around the village and on the headland answer the same breeze: gusts come in off the sea and reach them a few seconds later, each tree bends from its trunk and its branches follow a moment late, and between gusts they come back to rest exactly where they were painted. Both pause when the banner is hidden or scrolled away and hold still for reduced motion. Held still, it looks exactly like the `<img>`, which stays underneath as the fallback. `build_scene.py` derives the layers below from `coastal-banner.webp`, which it never changes; run it again whenever the painting changes. It needs numpy, pillow, scipy, scikit-image, scikit-learn and opencv-python-headless.
 
 | File | What it holds |
 | --- | --- |
 | `scene/mattes.png` | Soft mattes, full size: R water, G sky, B foliage |
-| `scene/fields.png` | Half size: R how shallow the water looks, G cloud density, B how freely foliage moves |
+| `scene/fields.png` | Half size: R how shallow the water looks, G cloud density |
 | `scene/water.png` | Full size: R distance to the shore in metres on the sea (square-root encoded, up to 24 m), G painted foam, B painted sunlight on the water |
-| `scene/groups.png` | Half size: which tree or bush each foliage pixel belongs to |
+| `scene/trees.png` | Half size: R which tree or bush each bit of foliage belongs to (the trees are listed in `build_scene.py` by their trunks), G how far out along its tree it is, 0 at the trunk and wherever it goes behind a roof or a wall, B how exposed it is, 1 at the crown's edge |
 | `scene/leaves.png` | The foliage alone, premultiplied by its matte |
 | `scene/plate.webp` | The painting with the foliage removed and the background filled in |
 | `scene/water-under.webp`, `scene/sky-under.webp` | Sea and sky continued under the land, for motion near their edges |
 
-Add `?scene=mattes` (or `water`, `sky`, `foliage`, `groups`, `flex`, `shore`, `clouds`, `plate`, `depth`, `foam`, `light`) to the address to see one layer, `?scene=probe` to shift each region by a few pixels, `?scene=composite` for every layer on and still (the sea held still), and `?scene=off` for the plain `<img>`.
+Add `?scene=mattes` (or `water`, `sky`, `foliage`, `trees`, `flex`, `exposure`, `shore`, `clouds`, `plate`, `depth`, `foam`, `light`) to the address to see one layer, `?scene=probe` to shift each region by a few pixels, `?scene=composite` for every layer on and still (the sea and the trees held still), and `?scene=off` for the plain `<img>`.

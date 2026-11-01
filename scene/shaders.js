@@ -28,7 +28,7 @@ uniform vec3 uProbe;
 #if defined(WATER) || defined(SKY) || defined(FOLIAGE) || DEBUG_VIEW > 0
 #define MATTES 1
 uniform sampler2D uMattes; // water, sky, foliage
-uniform sampler2D uFields; // how shallow the water is, cloud density, foliage flex
+uniform sampler2D uFields; // how shallow the water is, cloud density
 #endif
 #if defined(WATER) || DEBUG_VIEW > 0
 uniform sampler2D uWater;  // distance to the shore, painted foam, painted light
@@ -58,9 +58,18 @@ uniform vec4 uSea[3];
 uniform sampler2D uSkyUnder;   // the sky, carried on behind what stands in it
 #endif
 #if defined(FOLIAGE) || DEBUG_VIEW > 0
-uniform sampler2D uGroups; // which tree, as id / 255, read without filtering
-uniform sampler2D uPlate;  // the painting with the foliage taken out
-uniform sampler2D uLeaves; // the foliage, premultiplied by its matte
+uniform sampler2D uTreeMap; // which tree (id / 255, read without filtering), how far out along it, how exposed
+uniform sampler2D uPlate;   // the painting with the foliage taken out
+uniform sampler2D uLeaves;  // the foliage, premultiplied by its matte
+#endif
+#ifdef FOLIAGE
+// Each tree's springs (see foliage.js), two vec4s a tree, by id - 1: sway
+// now and a quarter period on, branch the same; up and down the same,
+// how much its leaves flutter, -. In painting pixels, at the tip.
+#define TREES 32
+uniform vec4 uTrees[TREES * 2];
+// motion (0 is the painting exactly), the flutter's course, -, -
+uniform vec4 uFoliage;
 #endif
 
 out vec4 outColor;
@@ -84,10 +93,10 @@ float shoreDistance(vec2 uv) {
 }
 #endif
 #if defined(FOLIAGE) || DEBUG_VIEW > 0
-float group(vec2 uv) {
-  ivec2 size = textureSize(uGroups, 0);
+int treeAt(vec2 uv) {
+  ivec2 size = textureSize(uTreeMap, 0);
   ivec2 texel = clamp(ivec2(uv * vec2(size)), ivec2(0), size - 1);
-  return texelFetch(uGroups, texel, 0).r * 255.0;
+  return int(texelFetch(uTreeMap, texel, 0).r * 255.0 + 0.5);
 }
 #endif
 
@@ -97,7 +106,7 @@ float group(vec2 uv) {
 float pure(float m) { return smoothstep(0.55, 1.0, m); }
 #endif
 
-#ifdef WATER
+#if defined(WATER) || defined(FOLIAGE)
 // Integer hashing (pcg2d), so the same cell gives the same number on every
 // GPU, however far out it is.
 uvec2 pcg(uvec2 v) {
@@ -121,6 +130,9 @@ float noise(vec2 p) {
   float e = dot(gradient(c + ivec2(1, 1)), f - vec2(1.0));
   return 1.4 * mix(mix(a, b, u.x), mix(d, e, u.x), u.y);
 }
+#endif
+
+#ifdef WATER
 
 // Where a pixel of the painting lies on the sea, in metres: x across the
 // view, z away from you. span is how many metres one painting pixel covers
@@ -296,7 +308,51 @@ Sea seaAt(vec2 uv, float shore, vec2 shoreSlope) {
 vec2 skyShift(vec2 uv) { return vec2(uProbe.y, 0.0) / uSource; }
 #endif
 #ifdef FOLIAGE
-vec2 foliageShift(vec2 uv) { return vec2(uProbe.z, 0.0) * fields(uv).b / uSource; }
+// Trees move from their trunks out: s is how far out along its tree a leaf
+// is, 0 at the trunk, e how exposed it is, 1 at the crown's edge.
+vec2 foliageShift(vec2 uv) {
+  vec2 st = texture(uTreeMap, uv).gb;
+  float s = st.x, e = st.y;
+  if (s <= 0.0) return vec2(0.0);
+  vec2 p = uv * uSource;
+  vec2 probe = vec2(uProbe.z, 0.0) * s;
+  float motion = uFoliage.x;
+  if (motion <= 0.0) return probe / uSource;
+
+  // A crown bends over its trunk like a rod held at its foot: hardly at all
+  // low down, most at the top, and the top a moment behind the foot.
+  float bend = s * s * (3.0 - s) * 0.5;
+  float lagSway = 0.5 * s;
+  // Each clump of branches keeps its own time, a little behind or ahead of
+  // the next, and goes its own distance: those out at the crown's edge
+  // further than those sheltered inside it.
+  float lagBranch = 0.8 * s + 1.4 * noise(p / 14.0);
+  float twig = smoothstep(0.08, 0.8, s) * (0.35 + 0.65 * e) * (0.75 + 0.3 * noise(p / 9.0 + 41.3));
+  vec2 sway = vec2(cos(lagSway), -sin(lagSway));
+  vec2 branch = vec2(cos(lagBranch), -sin(lagBranch));
+
+  // Where two trees meet, each moving its own way, their motions blend over
+  // a few pixels: one crown passing a little over the next.
+  vec2 d = vec2(0.0);
+  float flutter = 0.0;
+  for (int k = 0; k < 4; k++) {
+    vec2 o = vec2((k & 1) == 0 ? -1.5 : 1.5, (k & 2) == 0 ? -1.5 : 1.5);
+    int id = treeAt(uv + o / uSource);
+    if (id < 1 || id > TREES) continue;
+    vec4 a = uTrees[2 * id - 2], b = uTrees[2 * id - 1];
+    d.x += bend * dot(a.xy, sway) + twig * dot(a.zw, branch);
+    d.y += twig * dot(b.xy, branch);
+    flutter += b.z;
+  }
+  d *= 0.25;
+
+  // The leaves at the edge shiver, each clump its own way.
+  vec2 c = 16.0 * vec2(cos(uFoliage.y), sin(uFoliage.y));
+  vec2 q = p / 4.5;
+  vec2 shiver = vec2(noise(q + c), noise(q * 1.3 + vec2(c.y, -c.x) + 17.0));
+  d += 0.25 * flutter * e * smoothstep(0.05, 0.5, s) * shiver;
+  return (probe + d * motion) / uSource;
+}
 #endif
 
 vec3 compose(vec2 uv) {
@@ -341,8 +397,9 @@ vec3 compose(vec2 uv) {
   // the leaves used to cover it; covered ground is dimmed by the leaves
   // now over it. Every term is filtered linearly, so nothing moving means
   // exactly the painting, at any scale.
-  {
-    vec2 from = uv - foliageShift(uv);
+  vec2 moved = foliageShift(uv);
+  if (moved != vec2(0.0)) {
+    vec2 from = uv - moved;
     float a = mattes(from).b;
     vec3 leaves = texture(uLeaves, from).rgb;
     vec3 behind = color - texture(uLeaves, uv).rgb;
@@ -374,10 +431,11 @@ vec3 debugView(vec2 uv) {
 #elif DEBUG_VIEW == 4
   return mix(grey, base, m.b);
 #elif DEBUG_VIEW == 5
-  float id = group(uv);
-  return id > 0.0 ? mix(base, hue(id), 0.7) : grey;
+  float id = float(treeAt(uv));
+  return id > 0.0 ? mix(base, hue(id), 0.7 * m.b + 0.15) : grey;
 #elif DEBUG_VIEW == 6
-  return mix(grey, vec3(1.0, 0.85, 0.2) * f.b + vec3(0.1, 0.3, 0.1) * (1.0 - f.b), m.b);
+  float s = texture(uTreeMap, uv).g;
+  return mix(grey, vec3(1.0, 0.85, 0.2) * s + vec3(0.1, 0.3, 0.1) * (1.0 - s), max(m.b, s));
 #elif DEBUG_VIEW == 7
   // A line every metre out from the shore.
   float d = shoreDistance(uv);
@@ -391,8 +449,11 @@ vec3 debugView(vec2 uv) {
   return mix(grey, mix(vec3(0.05, 0.12, 0.45), vec3(0.3, 0.95, 0.85), f.r), m.r);
 #elif DEBUG_VIEW == 11
   return mix(grey, mix(base, vec3(1.0, 0.1, 0.35), w.g), m.r);
-#else
+#elif DEBUG_VIEW == 12
   return mix(grey, mix(base * 0.6, vec3(1.0, 0.85, 0.3), w.b), m.r);
+#else
+  float e = texture(uTreeMap, uv).b;
+  return mix(grey, mix(base * 0.5, vec3(0.6, 1.0, 0.4), e), max(m.b, e));
 #endif
 }
 #endif
@@ -407,8 +468,8 @@ void main() {
 }
 `;
 
-export const DEBUG_VIEWS = ["mattes", "water", "sky", "foliage", "groups", "flex", "shore", "clouds", "plate",
-  "depth", "foam", "light"];
+export const DEBUG_VIEWS = ["mattes", "water", "sky", "foliage", "trees", "flex", "shore", "clouds", "plate",
+  "depth", "foam", "light", "exposure"];
 
 export function fragmentSource(defines, debugView = 0) {
   const head = ["#version 300 es", ...defines.map((d) => `#define ${d} 1`), `#define DEBUG_VIEW ${debugView}`];

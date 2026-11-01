@@ -12,8 +12,10 @@
 //            cypresses (skyUnder); cloud density says where there is cloud.
 //   foliage  is lifted off (leaves, premultiplied) and moved over what was
 //            behind it, so a tree that sways uncovers the wall or the sky
-//            from the clean plate, not itself; flex says how freely each part
-//            moves and group which tree it belongs to.
+//            from the clean plate, not itself. The tree map says which tree
+//            each leaf belongs to, how far out along it it is (so trunks hold
+//            still and tips move most, and nothing slides out over a roof in
+//            front of it) and how exposed it is.
 //
 // A system costs nothing until it is switched on: its textures are not
 // loaded and its branch is not compiled into the shader. One that moves has
@@ -23,11 +25,12 @@
 // cypresses and the hills.
 
 import { Sea } from "./water.js";
+import { Foliage } from "./foliage.js";
 
 export const SYSTEMS = {
   water: { define: "WATER", textures: ["mattes", "fields", "waterUnder", "water"], Motion: Sea },
   sky: { define: "SKY", textures: ["mattes", "fields", "skyUnder"] },
-  foliage: { define: "FOLIAGE", textures: ["mattes", "fields", "groups", "plate", "leaves"] },
+  foliage: { define: "FOLIAGE", textures: ["mattes", "trees", "plate", "leaves"], Motion: Foliage },
 };
 
 // What the shader needs for a set of switched-on systems.

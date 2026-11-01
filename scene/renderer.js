@@ -14,10 +14,10 @@ const CONTEXT = {
   powerPreference: "low-power",
 };
 
-const UNITS = { painting: 0, mattes: 1, fields: 2, groups: 3, plate: 4, leaves: 5, waterUnder: 6, skyUnder: 7, water: 8 };
+const UNITS = { painting: 0, mattes: 1, fields: 2, trees: 3, plate: 4, leaves: 5, waterUnder: 6, skyUnder: 7, water: 8 };
 // WebGL's uniform type codes, to the call that sets each.
 const SETTERS = { 0x1406: "uniform1fv", 0x8b50: "uniform2fv", 0x8b51: "uniform3fv", 0x8b52: "uniform4fv" };
-const SAMPLERS = { painting: "uPainting", mattes: "uMattes", fields: "uFields", groups: "uGroups", plate: "uPlate", leaves: "uLeaves",
+const SAMPLERS = { painting: "uPainting", mattes: "uMattes", fields: "uFields", trees: "uTreeMap", plate: "uPlate", leaves: "uLeaves",
   waterUnder: "uWaterUnder", skyUnder: "uSkyUnder", water: "uWater" };
 
 export class Renderer {
