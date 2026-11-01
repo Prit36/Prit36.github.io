@@ -2,14 +2,14 @@
 // it never competes with the first paint. Until it is ready, and for good if
 // it can't start, the banner is the plain <img>.
 //
-// The sea and the trees move; the rest of the painting holds still for now.
+// The sea moves; the rest of the painting holds still for now.
 //
 // ?scene=... in the address picks a view for checking the layers:
 //   off       the plain <img>, no renderer
 //   composite every system on, holding still (must look like "off")
 //   probe     every region shifted sideways by a few pixels, alone
-//   mattes, water, sky, foliage, trees, flex, shore, clouds, plate,
-//   depth, foam, light, exposure
+//   mattes, water, sky, foliage, groups, flex, shore, clouds, plate,
+//   depth, foam, light
 //             one layer of the scene preparation
 
 import manifest from "./manifest.js";
@@ -20,7 +20,7 @@ import { DEBUG_VIEWS } from "./shaders.js";
 const root = document.querySelector(".landscape");
 const view = new URLSearchParams(location.search).get("scene");
 
-const LIVING = ["water", "foliage"];
+const LIVING = ["water"];
 
 const options = () => {
   const all = Object.keys(SYSTEMS);

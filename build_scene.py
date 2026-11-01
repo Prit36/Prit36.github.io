@@ -6,18 +6,16 @@ the layers a renderer needs to move parts of it on their own:
     assets/scene/mattes.png   R water, G sky, B foliage. Soft alpha at the
                               painting's full size, edges snapped to the brushwork.
     assets/scene/fields.png   R how shallow the water looks, G cloud density
-                              inside the sky. Half size; these only change
-                              slowly.
+                              inside the sky, B how freely each bit of
+                              foliage may move (0 at the trunk). Half size;
+                              these only change slowly.
     assets/scene/water.png    R distance to the shore in metres on the water
                               (square-rooted, to keep detail close in), G the
                               painted foam along the shore, B where the
                               painting has light on the water.
-    assets/scene/trees.png    R which tree or bush each bit of foliage belongs
-                              to (see TREES), so each can move in its own way;
-                              G how far out along its tree it is, 0 at the
-                              trunk and wherever it goes behind something; B
-                              how exposed it is, 1 at the crown's edge. Half
-                              size, all carried a little past the leaves.
+    assets/scene/groups.png   Which tree or bush each foliage pixel belongs to,
+                              so neighbouring trees can sway out of step. Half
+                              size, sampled without filtering.
     assets/scene/plate.webp   The painting with its foliage taken out and the
                               walls, hills and sky behind filled in, for what a
                               swaying tree uncovers.
@@ -55,7 +53,7 @@ import cv2
 import numpy as np
 from PIL import Image, ImageDraw
 from scipy import ndimage as ndi
-from skimage import color, graph, segmentation
+from skimage import color, feature, segmentation
 from sklearn.ensemble import HistGradientBoostingClassifier
 
 ROOT = Path(__file__).parent
@@ -113,56 +111,6 @@ ZONES = {
     "headland": [(1090, 312), (1340, 312), (1440, 330), (1440, 396), (1380, 396), (1340, 356),
                  (1090, 356)],
 }
-# The boulders down by the water below the scrub: their shadows are dark
-# olive, and read as leaves, but nothing grows there.
-BOULDERS = [(1860, 560), (1975, 560), (2030, 650), (2040, 724), (1860, 724)]
-
-# The trees that move, each by its trunk: what kind of tree it is (which
-# says how it answers the wind, see foliage.js), a line from where its trunk
-# is last seen up through its crown to its top, and how much more trunk is
-# hidden below that, behind a roof or another tree, in pixels. Trees are
-# found from these lines, so the line only has to run up the middle of the
-# crown; the first point is what the tree bends from.
-TREES = [
-    # The two tall cypresses on the right, rising from behind the olive.
-    ("cypress", [(2121, 316), (2119, 136)], 70),
-    ("cypress", [(2156, 318), (2155, 164)], 70),
-    # Behind the house with the bell tower, rooted below its roof.
-    ("cypress", [(2052, 248), (2053, 193)], 40),
-    ("cypress", [(2064, 250), (2064, 204)], 40),
-    ("broadleaf", [(2086, 254), (2086, 220)], 30),
-    # Left of the bell tower, behind the lower roofs.
-    ("cypress", [(1992, 318), (1993, 218)], 30),
-    ("cypress", [(1972, 318), (1972, 241)], 30),
-    ("cypress", [(1946, 318), (1946, 216)], 30),
-    ("cypress", [(1920, 300), (1920, 258)], 30),
-    ("broadleaf", [(1897, 304), (1897, 274)], 20),
-    # The olive in front, from the fork of its trunk, and the trees behind it.
-    ("olive", [(2138, 496), (2128, 440), (2108, 380), (2096, 328)], 0),
-    ("broadleaf", [(2050, 370), (2050, 304)], 30),
-    ("bush", [(2020, 438), (2018, 362)], 0),
-    # Scrub on the slope and over the rocks below the olive.
-    ("bush", [(2052, 516), (2054, 464)], 0),
-    ("bush", [(2092, 654), (2104, 545)], 0),
-    ("bush", [(1945, 466), (1945, 412)], 0),
-    # The village: the umbrella pine above the wall, the trees around it,
-    # and the one in front of the house on the right.
-    ("pine", [(1798, 346), (1801, 286)], 0),
-    ("broadleaf", [(1735, 392), (1735, 324)], 0),
-    ("broadleaf", [(1863, 401), (1861, 364)], 0),
-    ("cypress", [(1625, 382), (1625, 352)], 0),
-    ("broadleaf", [(1608, 402), (1605, 366)], 0),
-    # The headland: three umbrella pines and the cypress by the houses.
-    ("pine", [(1206, 361), (1206, 345)], 6),
-    ("pine", [(1260, 361), (1260, 342)], 6),
-    ("pine", [(1298, 361), (1300, 348)], 6),
-    ("cypress", [(1405, 389), (1405, 354)], 0),
-]
-# Foliage none of the trees reaches moves as a bush of its own if it has at
-# least this many pixels; smaller, it is too small to be seen to move.
-BUSH = 250
-# As many as the shader has room for (TREES in shaders.js).
-MAX_TREES = 40
 
 # Points of the painting the scene is arranged around.
 LANDMARKS = {"lamp": [1164, 329], "horizon": HORIZON}
@@ -399,98 +347,50 @@ def build_foliage(p):
     leaf = ndi.binary_propagation(ndi.binary_opening(raw, iterations=1), mask=raw)
     leaf = drop_small(leaf, 120)
     leaf = ~drop_small(~leaf, 25) & zone
-    return leaf & ~polygon(p.shape, BOULDERS)
+    return leaf
 
 
-def trunk_lines(shape, trees):
-    """Each tree's trunk line drawn into an image of tree ids."""
-    img = Image.new("I", (shape[1], shape[0]), 0)
-    draw = ImageDraw.Draw(img)
-    for i, (_, pts, _) in enumerate(trees, start=1):
-        draw.line(pts, fill=i, width=3)
-    return np.asarray(img, np.int32)
+def build_groups(leaf):
+    """Split the foliage into trees and bushes: connected pieces, with the
+    large ones cut along the narrowest places between their crowns."""
+    dist = ndi.distance_transform_edt(leaf)
+    smooth = ndi.gaussian_filter(dist, 3)
+    peaks = feature.peak_local_max(smooth, min_distance=22, threshold_abs=3, labels=ndi.label(leaf)[0])
+    markers = np.zeros(leaf.shape, np.int32)
+    markers[tuple(peaks.T)] = np.arange(1, len(peaks) + 1)
+    groups = segmentation.watershed(-smooth, markers, mask=leaf)
+    # Pieces too small to have found a peak keep their own id.
+    lab, n = ndi.label(leaf & (groups == 0))
+    groups[lab > 0] = lab[lab > 0] + groups.max()
+    # Each tree's id reaches a little past its leaves, so leaves blown out
+    # past their old edge still know which tree they belong to.
+    dist, (iy, ix) = ndi.distance_transform_edt(groups == 0, return_indices=True)
+    grown = groups[iy, ix]
+    grown[dist > REACH] = 0
+    return grown
 
 
-def build_trees(p, leaf, sky, water):
-    """Split the foliage into the trees and bushes that make it up, and say
-    how each part of each one moves.
-
-    Each tree in TREES grows out from its trunk line over the leaves until it
-    meets another's at the strongest change of colour between them, which is
-    where one crown passes in front of the next. Foliage none of them reaches
-    is a bush of its own if it is big enough, and holds still if not.
-
-    flex is how far out along the tree a leaf is, measured through the tree
-    from its trunk rather than straight up: the low branches of a spreading
-    olive are as free as its top, and its trunk is not. Where foliage goes
-    behind something below it, a roof, a wall or the rock it grows from, it
-    is held there, so leaves never slide out over what is in front of them.
-
-    exposure is 1 at a crown's edge, where the leaves are out in the wind,
-    falling off a few pixels in.
-
-    Returns the tree id, flex and exposure, each carried REACH pixels past
-    the leaves (so leaves moved past their old edge still know how to move),
-    and the list of trees, TREES and then the bushes found."""
-    h, w = p.shape
-    lab = color.rgb2lab(p.rgb)
-    lab = np.stack([ndi.gaussian_filter(lab[..., c], 1.2) for c in range(3)], -1)
-    edges = np.sqrt(sum(ndi.sobel(lab[..., c], a) ** 2 for c in range(3) for a in (0, 1)))
-
-    lines = trunk_lines(p.shape, TREES)
-    for i in range(1, len(TREES) + 1):
-        if not (leaf & (lines == i)).any():
-            raise SystemExit(f"tree {i} at {TREES[i - 1][1][0]}: its trunk line misses the foliage")
-    ids = segmentation.watershed(edges, lines * leaf, mask=leaf)
-    trees = [(kind, [tuple(map(int, q)) for q in pts], root) for kind, pts, root in TREES]
-    pieces, n = ndi.label(leaf & (ids == 0))
-    sizes = ndi.sum(np.ones_like(pieces), pieces, np.arange(n + 1))
-    for k, sl in enumerate(ndi.find_objects(pieces), start=1):
-        if sizes[k] < BUSH:
-            continue
-        ys, xs = np.nonzero(pieces[sl] == k)
-        ys, xs = ys + sl[0].start, xs + sl[1].start
-        base = (int(round(xs[ys >= ys.max() - 2].mean())), int(ys.max()))
-        tip = (int(round(xs[ys == ys.min()].mean())), int(ys.min()))
-        trees.append(("bush", [base, tip], 0))
-        ids[pieces == k] = len(trees)
-
-    # How far out along its tree each leaf is: the distance through the
-    # tree from the foot of its trunk line, over the trunk line's length.
-    reach = np.zeros((h, w), np.float32)
-    for i, sl in enumerate(ndi.find_objects(ids), start=1):
+def build_flex(leaf, groups):
+    """0 where a plant is rooted, rising to 1 at the top of its crown, and
+    carried REACH pixels past the leaves, fading out, so that leaves moved
+    beyond their old edge are moved there too."""
+    flex = np.zeros(leaf.shape, np.float32)
+    ys = np.arange(leaf.shape[0])[:, None] * np.ones((1, leaf.shape[1]))
+    inside = groups * leaf
+    for gid, sl in enumerate(ndi.find_objects(inside), start=1):
         if sl is None:
             continue
-        _, pts, root = trees[i - 1]
-        y0, y1 = sl[0].start, sl[0].stop
-        x0, x1 = sl[1].start, sl[1].stop
-        own = ids[y0:y1, x0:x1] == i
-        oy, ox = np.nonzero(own)
-        k = np.argmin((ox + x0 - pts[0][0]) ** 2 + (oy + y0 - pts[0][1]) ** 2)
-        dist, _ = graph.MCP_Geometric(np.where(own, 1.0, np.inf)).find_costs([(oy[k], ox[k])])
-        length = sum(np.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))
-        s = np.clip((np.where(own, dist, 0) + root) / (length + root), 0, 1)
-        reach[y0:y1, x0:x1][own] = s[own]
-
-    # Held where foliage goes behind something along its lower edge: a roof
-    # line, the top of a wall, a ledge of rock, all long and level. The
-    # ragged underside of a crown, with ground showing in the hollows between
-    # its clumps, is free to move.
-    above = np.zeros_like(leaf)
-    for k in range(1, 4):
-        above[k:] |= leaf[:-k]
-    held = above & drop_small(~leaf & ~sky & ~water, 400)
-    level = np.ones((1, 9), bool)
-    held = ndi.binary_opening(ndi.binary_closing(held, np.ones((1, 3), bool)), level)
-    hold = np.clip((ndi.distance_transform_edt(~held) - 1) / 4, 0, 1)
-
-    exposure = np.exp(-ndi.distance_transform_edt(leaf) / 5)
-
-    dist, (iy, ix) = ndi.distance_transform_edt(ids == 0, return_indices=True)
-    fade = np.clip(1 - (dist - 4) / (REACH - 4), 0, 1)
-    fade = fade * fade * (3 - 2 * fade)
-    out = np.where(dist <= REACH, ids[iy, ix], 0)
-    return out, reach[iy, ix] * fade * hold, exposure[iy, ix] * fade, trees
+        m = inside[sl] == gid
+        y = ys[sl][m]
+        y0, y1 = y.min(), y.max()
+        height = max(8.0, y1 - y0)
+        flex[sl][m] = np.clip((y1 - y) / height, 0, 1) ** 1.3
+    w = leaf.astype(np.float32)
+    near = ndi.gaussian_filter(flex * w, 2) / np.maximum(ndi.gaussian_filter(w, 2), 1e-3)
+    far = ndi.gaussian_filter(flex * w, 6) / np.maximum(ndi.gaussian_filter(w, 6), 1e-3)
+    out_dist = ndi.distance_transform_edt(~leaf)
+    fade = np.clip(1 - out_dist / REACH, 0, 1) ** 2
+    return np.clip(np.where(leaf, near, far * fade), 0, 1)
 
 
 def build_clouds(p, sky):
@@ -601,22 +501,6 @@ def build_plate(p, leaf):
     soft = np.stack([ndi.gaussian_filter(out[..., c] * weight, (2.5, 0.8)) for c in range(3)], -1)
     soft /= np.maximum(ndi.gaussian_filter(weight, (2.5, 0.8)), 1e-4)[..., None]
     out[hole] = soft[hole]
-    # A tree that sways uncovers only a pixel or two along its edge. There
-    # the plate is what lies just past the edge, on whichever side: the sky
-    # over a crown, not the far ends of the row through it. Deeper in, the
-    # rows take over.
-    known = (~hole).astype(np.float32)
-    near = np.zeros_like(out)
-    have = ~hole
-    for sigma in (1.5, 3, 6):
-        den = ndi.gaussian_filter(known, sigma)
-        fill = np.stack([ndi.gaussian_filter(img[..., c] * known, sigma) for c in range(3)], -1)
-        take = ~have & (den > 0.1)
-        near[take] = (fill / np.maximum(den, 1e-6)[..., None])[take]
-        have |= take
-    depth = ndi.distance_transform_edt(hole)
-    edge = (np.clip((14 - depth) / 6, 0, 1) * (have & hole))[..., None]
-    out = edge * near + (1 - edge) * out
     out = (np.clip(out, 0, 1) * 255).round().astype(np.uint8)
     buf = io.BytesIO()
     Image.fromarray(out).save(buf, "WEBP", quality=92, method=6)
@@ -693,7 +577,7 @@ def foliage_matte(p, leaf, plate):
     return np.ceil(a * 255 - 1e-4) / 255
 
 
-def save_assets(rgb, water, sky, foliage, fields, sea, trees, plate, plate_webp, unders, top):
+def save_assets(rgb, water, sky, foliage, fields, sea, groups, plate, plate_webp, unders, top):
     OUT.mkdir(parents=True, exist_ok=True)
     q = lambda a: (np.clip(a, 0, 1) * 255).round().astype(np.uint8)
     Image.fromarray(np.stack([q(water), q(sky), q(foliage)], -1)).save(OUT / "mattes.png", optimize=True)
@@ -704,12 +588,10 @@ def save_assets(rgb, water, sky, foliage, fields, sea, trees, plate, plate_webp,
     shore, foam, light = sea
     shore = np.sqrt(shore / SHORE_REACH)
     Image.fromarray(np.stack([q(shore), q(foam), q(light)], -1)).save(OUT / "water.png", optimize=True)
-    ids, flex, exposure, kinds = trees
-    if len(kinds) > MAX_TREES:
-        raise SystemExit(f"{len(kinds)} trees; the shader takes {MAX_TREES}")
-    small = lambda a: np.asarray(Image.fromarray(q(a)).resize(half, Image.BOX))
-    t = np.stack([ids[::2, ::2].astype(np.uint8), small(flex), small(exposure)], -1)
-    Image.fromarray(t).save(OUT / "trees.png", optimize=True)
+    ids = groups[::2, ::2].astype(np.int32)
+    if ids.max() > 255:
+        raise SystemExit(f"{ids.max()} foliage groups; ids are stored in 8 bits")
+    Image.fromarray(ids.astype(np.uint8), "L").save(OUT / "groups.png", optimize=True)
     (OUT / "plate.webp").write_bytes(plate_webp)
     for name, data in unders.items():
         (OUT / f"{name}-under.webp").write_bytes(data)
@@ -721,20 +603,17 @@ def save_assets(rgb, water, sky, foliage, fields, sea, trees, plate, plate_webp,
         "source": {"width": w, "height": h},
         "landmarks": {**LANDMARKS, "waterline": [int(v) for v in np.round(top[::8])], "waterlineStep": 8},
         "sea": {**SEA_VIEW, "shoreReach": SHORE_REACH},
-        "trees": [{"kind": kind, "base": list(pts[0]), "top": list(pts[-1]),
-                   "length": round(float(sum(np.hypot(b[0] - a[0], b[1] - a[1]) for a, b in zip(pts, pts[1:]))), 1),
-                   "root": root} for kind, pts, root in kinds],
         "textures": {
             "mattes": {"url": "assets/scene/mattes.png", "width": w, "height": h,
                        "format": "rgb", "channels": ["water", "sky", "foliage"], "filter": "linear"},
             "fields": {"url": "assets/scene/fields.png", "width": half[0], "height": half[1],
-                       "format": "rgb", "channels": ["waterShallow", "cloudDensity", "unused"], "filter": "linear"},
+                       "format": "rgb", "channels": ["waterShallow", "cloudDensity", "foliageFlex"], "filter": "linear",
+                       "foliageReach": REACH},
             "water": {"url": "assets/scene/water.png", "width": w, "height": h,
                       "format": "rgb", "channels": ["shoreDistance", "foam", "light"], "filter": "linear",
                       "shoreDistance": "sqrt(metres / sea.shoreReach)"},
-            "trees": {"url": "assets/scene/trees.png", "width": half[0], "height": half[1],
-                      "format": "rgb", "channels": ["tree", "flex", "exposure"], "filter": "linear",
-                      "tree": "id, 1 to trees.length, read without filtering", "reach": REACH},
+            "groups": {"url": "assets/scene/groups.png", "width": half[0], "height": half[1],
+                       "format": "r", "channels": ["foliageGroup"], "filter": "nearest", "count": int(ids.max())},
             "plate": {"url": "assets/scene/plate.webp", "width": w, "height": h,
                       "format": "rgb", "channels": ["red", "green", "blue"], "filter": "linear", "removes": ["foliage"]},
             "waterUnder": {"url": "assets/scene/water-under.webp", "width": half[0], "height": half[1],
@@ -749,8 +628,6 @@ def save_assets(rgb, water, sky, foliage, fields, sea, trees, plate, plate_webp,
     text = json.dumps(manifest, indent=2)
     # Lists of numbers and short lists of names, one line each.
     text = re.sub(r"\[\s+([^\[\]{}]*?)\s+\]", lambda m: "[" + re.sub(r",\s+", ", ", m.group(1)) + "]", text)
-    # And a tree a line.
-    text = re.sub(r"\{\s+(\"kind\"[^{}]*?)\s+\}", lambda m: "{ " + re.sub(r",\s+", ", ", m.group(1)) + " }", text)
     MANIFEST.write_text(
         "// Generated by build_scene.py from assets/coastal-banner.webp. Do not edit.\n"
         f"export default {text};\n",
@@ -758,7 +635,7 @@ def save_assets(rgb, water, sky, foliage, fields, sea, trees, plate, plate_webp,
     )
 
 
-def preview(dirpath, rgb, water, sky, foliage, trees, plate, fields, sea):
+def preview(dirpath, rgb, water, sky, foliage, groups, plate, fields, sea):
     d = Path(dirpath)
     d.mkdir(parents=True, exist_ok=True)
     base = (rgb * 255).astype(np.float32)
@@ -770,19 +647,14 @@ def preview(dirpath, rgb, water, sky, foliage, trees, plate, fields, sea):
     tint(water, (255, 0, 80), "water.png")
     tint(sky, (255, 140, 0), "sky.png")
     tint(foliage, (255, 0, 255), "foliage.png")
-    ids, flex, exposure, kinds = trees
     rng = np.random.default_rng(0)
-    pal = rng.integers(40, 255, (len(kinds) + 1, 3)).astype(np.float32)
-    inside = (ids > 0) & (foliage > 0.5)
-    g = np.where(inside[..., None], pal[ids] * 0.6 + base * 0.4, base * 0.5)
-    img = Image.fromarray(g.astype(np.uint8))
-    draw = ImageDraw.Draw(img)
-    for i, (_, pts, _) in enumerate(kinds, start=1):
-        draw.line(pts, fill=(255, 255, 255), width=1)
-        draw.text((pts[-1][0] + 2, pts[-1][1] - 10), str(i), fill=(255, 255, 255))
-    img.save(d / "trees.png")
+    pal = rng.integers(40, 255, (groups.max() + 1, 3)).astype(np.float32)
+    pal[0] = 0
+    g = pal[groups] * 0.7 + base * 0.3
+    g[groups == 0] = base[groups == 0]
+    Image.fromarray(g.astype(np.uint8)).save(d / "groups.png")
     Image.fromarray(plate).save(d / "plate.png")
-    for name, f in zip(("depth", "clouds", "flex", "exposure"), (*fields[:2], flex, exposure)):
+    for name, f in zip(("depth", "clouds", "flex"), fields):
         Image.fromarray((f * 255).astype(np.uint8)).save(d / f"{name}.png")
     shore, foam, light = sea
     Image.fromarray((shore / SHORE_REACH * 255).astype(np.uint8)).save(d / "shore.png")
@@ -817,15 +689,16 @@ def main():
     sky = np.minimum(sky, 1 - foliage)
     water = np.minimum(water, 1 - foliage)
 
-    trees = build_trees(p, leaf, sky_hard, water_hard)
-    fields = (build_depth(p, water_hard), build_clouds(p, sky_hard), np.zeros_like(water))
+    groups = build_groups(leaf)
+    flex = build_flex(leaf, groups)
+    fields = (build_depth(p, water_hard), build_clouds(p, sky_hard), flex)
     shore = build_shore_distance(p, water_hard, top, leaf)
     sea = (shore, build_foam(p, water_hard, shore), build_sea_light(p, water_hard))
     unders = {"water": build_underlay(p, water_hard), "sky": build_underlay(p, sky_hard)}
-    save_assets(rgb, water, sky, foliage, fields, sea, trees, plate, plate_webp, unders, top)
+    save_assets(rgb, water, sky, foliage, fields, sea, groups, plate, plate_webp, unders, top)
     if args.preview:
-        preview(args.preview, rgb, water, sky, foliage, trees, plate, fields, sea)
-    print(f"water {water.mean():.3f}, sky {sky.mean():.3f}, foliage {foliage.mean():.3f}, trees {len(trees[3])}")
+        preview(args.preview, rgb, water, sky, foliage, groups, plate, fields, sea)
+    print(f"water {water.mean():.3f}, sky {sky.mean():.3f}, foliage {foliage.mean():.3f}, groups {groups.max()}")
 
 
 if __name__ == "__main__":
