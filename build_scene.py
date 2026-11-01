@@ -5,14 +5,10 @@ the layers a renderer needs to move parts of it on their own:
 
     assets/scene/mattes.png   R water, G sky, B foliage. Soft alpha at the
                               painting's full size, edges snapped to the brushwork.
-    assets/scene/fields.png   R how shallow the water looks, G cloud density
-                              inside the sky, B how freely each bit of
-                              foliage may move (0 at the trunk). Half size;
-                              these only change slowly.
-    assets/scene/water.png    R distance to the shore in metres on the water
-                              (square-rooted, to keep detail close in), G the
-                              painted foam along the shore, B where the
-                              painting has light on the water.
+    assets/scene/fields.png   R distance from the shore inside the water,
+                              G cloud density inside the sky, B how freely
+                              each bit of foliage may move (0 at the trunk).
+                              Half size; these only change slowly.
     assets/scene/groups.png   Which tree or bush each foliage pixel belongs to,
                               so neighbouring trees can sway out of step. Half
                               size, sampled without filtering.
@@ -114,21 +110,6 @@ ZONES = {
 
 # Points of the painting the scene is arranged around.
 LANDMARKS = {"lamp": [1164, 329], "horizon": HORIZON}
-
-# The sea is a flat plane seen from a little above it: a pixel of it near the
-# bottom of the painting is a couple of centimetres across, one near the
-# horizon metres. Distances along the water, and the waves on it, are
-# measured on that plane, not on the picture. In painting pixels, except the
-# eye's height, which is in metres. The renderer uses the same numbers.
-#
-# True perspective squashes the far water into the view by focal / d, d the
-# rows below the horizon: thirty times over at the headland. The painter
-# didn't: the foam at the headland's foot is a few pixels tall. So the squash
-# stops growing at `stretch`, beyond which a row of far water is `stretch`
-# times as deep as it is wide.
-SEA_VIEW = {"horizon": 374, "centre": 1086, "focal": 800, "eye": 6, "stretch": 3}
-# How far out from the shore its distance is kept, in metres.
-SHORE_REACH = 24
 
 
 def load():
@@ -403,70 +384,10 @@ def build_clouds(p, sky):
     return np.clip((diff - 6) / 30, 0, 1) * sky
 
 
-def spread(a, region, sigma):
-    """`a` averaged over `region` only, and carried out past its edge."""
-    m = region.astype(np.float32)
-    return ndi.gaussian_filter(a * m, sigma) / np.maximum(ndi.gaussian_filter(m, sigma), 1e-4)
-
-
-def build_shore_distance(p, water, top, leaf):
-    """How far each bit of sea is from the nearest rock or beach, in metres
-    on the water. A metre across the view is d / eye pixels and a metre into
-    it (stretch) times fewer (see SEA_VIEW), so the distance is taken with the
-    rows stretched to match: done for a ladder of stretches, each row reading
-    the one that fits it. The edges of the picture and the open horizon are
-    not shore, and nor are trees in front of the water: the sea carries on
-    behind them, so a glimpse of it between two pines gets no surf."""
-    h, w = p.shape
-    horizon, focal, eye = SEA_VIEW["horizon"], SEA_VIEW["focal"], SEA_VIEW["eye"]
-    land = ~water & ~leaf & (p.yy > top[None, :] + 1)
-    rows = np.arange(h)
-    d = np.maximum(rows - horizon, 1.0)
-    stretch = np.log(np.minimum(focal / d, SEA_VIEW["stretch"]))
-    ladder = np.log(np.geomspace(focal / (h - horizon), SEA_VIEW["stretch"], 9))
-    out = np.zeros((h, w), np.float32)
-    for i, k in enumerate(ladder):
-        dist = ndi.distance_transform_edt(~land, sampling=(np.exp(k), 1.0)).astype(np.float32)
-        lo = ladder[i - 1] if i else -np.inf
-        hi = ladder[i + 1] if i + 1 < len(ladder) else np.inf
-        # A tent over the log stretch: each row blends the two nearest rungs.
-        if i == 0:
-            wgt = np.where(stretch <= k, 1, np.clip((hi - stretch) / (hi - k), 0, 1))
-        elif i + 1 == len(ladder):
-            wgt = np.where(stretch >= k, 1, np.clip((stretch - lo) / (k - lo), 0, 1))
-        else:
-            wgt = np.clip(np.minimum((stretch - lo) / (k - lo), (hi - stretch) / (hi - k)), 0, 1)
-        out += dist * wgt[:, None]
-    metres = out * (eye / d)[:, None]
-    return np.where(land, 0, np.minimum(metres, SHORE_REACH))
-
-
-def build_depth(p, water):
-    """How shallow the water looks, 0 deep blue to 1 turquoise: sand seen
-    through a little water turns the blue green. Smooth, since it says how
-    the water moves, not what colour it is; the haze along the horizon is
-    deep water whatever its colour."""
-    tint = spread(p.g / (p.b + 1e-3), water, 16)
-    shallow = np.clip((tint - 0.66) / 0.26, 0, 1)
-    far = np.clip((p.yy - SEA_VIEW["horizon"] - 6) / 24, 0, 1)
-    return shallow * far
-
-
-def build_foam(p, water, shore):
-    """The foam the painter put along the beach and round the rocks: pale,
-    colourless water within a few metres of the shore. Pale strokes further
-    out are the sun on the water, not foam."""
-    pale = water & (p.v > 0.78) & (p.s < 0.25) & (shore < 3)
-    return np.clip(ndi.gaussian_filter(pale.astype(np.float32), 0.7) * 1.6, 0, 1)
-
-
-def build_sea_light(p, water):
-    """Where the painter put light on the water: how many strokes stand out
-    brighter than the water around them, smoothed into regions. Glints only
-    come where the painting already has light to give them."""
-    light = p.rgb @ np.array([0.299, 0.587, 0.114], np.float32)
-    lift = np.clip((light - spread(light, water, 12) - 0.02) / 0.15, 0, 1) * water
-    return np.clip(spread(lift, water, 20) / 0.3, 0, 1)
+def build_shore_distance(water):
+    """Distance from land inside the water, 0 at the shore, 1 at 128 px."""
+    d = ndi.distance_transform_edt(np.pad(water, 1, constant_values=True))[1:-1, 1:-1]
+    return np.clip(d / 128, 0, 1) * water
 
 
 def build_plate(p, leaf):
@@ -577,7 +498,7 @@ def foliage_matte(p, leaf, plate):
     return np.ceil(a * 255 - 1e-4) / 255
 
 
-def save_assets(rgb, water, sky, foliage, fields, sea, groups, plate, plate_webp, unders, top):
+def save_assets(rgb, water, sky, foliage, fields, groups, plate, plate_webp, unders, top):
     OUT.mkdir(parents=True, exist_ok=True)
     q = lambda a: (np.clip(a, 0, 1) * 255).round().astype(np.uint8)
     Image.fromarray(np.stack([q(water), q(sky), q(foliage)], -1)).save(OUT / "mattes.png", optimize=True)
@@ -585,9 +506,6 @@ def save_assets(rgb, water, sky, foliage, fields, sea, groups, plate, plate_webp
     half = (w // 2, h // 2)
     f = np.stack([q(c) for c in fields], -1)
     Image.fromarray(f).resize(half, Image.BOX).save(OUT / "fields.png", optimize=True)
-    shore, foam, light = sea
-    shore = np.sqrt(shore / SHORE_REACH)
-    Image.fromarray(np.stack([q(shore), q(foam), q(light)], -1)).save(OUT / "water.png", optimize=True)
     ids = groups[::2, ::2].astype(np.int32)
     if ids.max() > 255:
         raise SystemExit(f"{ids.max()} foliage groups; ids are stored in 8 bits")
@@ -602,16 +520,12 @@ def save_assets(rgb, water, sky, foliage, fields, sea, groups, plate, plate_webp
     manifest = {
         "source": {"width": w, "height": h},
         "landmarks": {**LANDMARKS, "waterline": [int(v) for v in np.round(top[::8])], "waterlineStep": 8},
-        "sea": {**SEA_VIEW, "shoreReach": SHORE_REACH},
         "textures": {
             "mattes": {"url": "assets/scene/mattes.png", "width": w, "height": h,
                        "format": "rgb", "channels": ["water", "sky", "foliage"], "filter": "linear"},
             "fields": {"url": "assets/scene/fields.png", "width": half[0], "height": half[1],
-                       "format": "rgb", "channels": ["waterShallow", "cloudDensity", "foliageFlex"], "filter": "linear",
+                       "format": "rgb", "channels": ["shoreDistance", "cloudDensity", "foliageFlex"], "filter": "linear",
                        "foliageReach": REACH},
-            "water": {"url": "assets/scene/water.png", "width": w, "height": h,
-                      "format": "rgb", "channels": ["shoreDistance", "foam", "light"], "filter": "linear",
-                      "shoreDistance": "sqrt(metres / sea.shoreReach)"},
             "groups": {"url": "assets/scene/groups.png", "width": half[0], "height": half[1],
                        "format": "r", "channels": ["foliageGroup"], "filter": "nearest", "count": int(ids.max())},
             "plate": {"url": "assets/scene/plate.webp", "width": w, "height": h,
@@ -635,7 +549,7 @@ def save_assets(rgb, water, sky, foliage, fields, sea, groups, plate, plate_webp
     )
 
 
-def preview(dirpath, rgb, water, sky, foliage, groups, plate, fields, sea):
+def preview(dirpath, rgb, water, sky, foliage, groups, plate, fields):
     d = Path(dirpath)
     d.mkdir(parents=True, exist_ok=True)
     base = (rgb * 255).astype(np.float32)
@@ -654,12 +568,8 @@ def preview(dirpath, rgb, water, sky, foliage, groups, plate, fields, sea):
     g[groups == 0] = base[groups == 0]
     Image.fromarray(g.astype(np.uint8)).save(d / "groups.png")
     Image.fromarray(plate).save(d / "plate.png")
-    for name, f in zip(("depth", "clouds", "flex"), fields):
+    for name, f in zip(("shore", "clouds", "flex"), fields):
         Image.fromarray((f * 255).astype(np.uint8)).save(d / f"{name}.png")
-    shore, foam, light = sea
-    Image.fromarray((shore / SHORE_REACH * 255).astype(np.uint8)).save(d / "shore.png")
-    tint(foam, (255, 0, 80), "foam.png")
-    tint(light, (255, 200, 0), "light.png")
     # Every pixel accounted for once: water, sky, foliage, and the rest.
     rest = np.clip(1 - water - sky - foliage, 0, 1)
     over = np.clip(water + sky + foliage - 1, 0, 1)
@@ -691,13 +601,11 @@ def main():
 
     groups = build_groups(leaf)
     flex = build_flex(leaf, groups)
-    fields = (build_depth(p, water_hard), build_clouds(p, sky_hard), flex)
-    shore = build_shore_distance(p, water_hard, top, leaf)
-    sea = (shore, build_foam(p, water_hard, shore), build_sea_light(p, water_hard))
+    fields = (build_shore_distance(water_hard), build_clouds(p, sky_hard), flex)
     unders = {"water": build_underlay(p, water_hard), "sky": build_underlay(p, sky_hard)}
-    save_assets(rgb, water, sky, foliage, fields, sea, groups, plate, plate_webp, unders, top)
+    save_assets(rgb, water, sky, foliage, fields, groups, plate, plate_webp, unders, top)
     if args.preview:
-        preview(args.preview, rgb, water, sky, foliage, groups, plate, fields, sea)
+        preview(args.preview, rgb, water, sky, foliage, groups, plate, fields)
     print(f"water {water.mean():.3f}, sky {sky.mean():.3f}, foliage {foliage.mean():.3f}, groups {groups.max()}")
 
 

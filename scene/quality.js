@@ -3,11 +3,10 @@
 // exactly like the <img>; the tiers only limit what motion will cost later.
 
 const TIERS = {
-  // Pixels the canvas may have, and frames per second while animating. The
-  // sea moves slowly, a fraction of a pixel a frame, so 30 is smooth.
-  high: { maxPixels: 4.5e6, fps: 30 },
+  // Pixels the canvas may have, and frames per second while animating.
+  high: { maxPixels: 4.5e6, fps: 60 },
   medium: { maxPixels: 3e6, fps: 30 },
-  low: { maxPixels: 1.6e6, fps: 24 },
+  low: { maxPixels: 1.6e6, fps: 30 },
 };
 
 export function pickQuality(gl) {
