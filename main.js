@@ -1292,32 +1292,207 @@
       k.undo(() => clearInterval(t));
     },
 
-    // The leftovers an uninstaller missed, found and swept away one by one
+    // Faint copies of the name spill out behind it, the leftovers an uninstall
+    // misses. A scan line sweeps across and takes the name and every copy
+    // apart into dust. After a beat with nothing there, the name comes back.
     traceless: (k) => {
-      const box = k.put(k.a.parentElement, make("span", "fx-trace"));
-      box.style.left = `${k.stack.offsetLeft}px`;
+      const a = k.a;
+      const cs = getComputedStyle(a);
+      const fs = parseFloat(cs.fontSize);
+      const body = getComputedStyle(document.body);
+      const ink = body.getPropertyValue("--ink-3").trim();
+      const accent = body.getPropertyValue("--accent").trim();
+      const text = a.textContent;
+      const font = `${cs.fontStyle} ${cs.fontWeight} ${cs.fontSize} ${cs.fontFamily}`;
+
+      // Where the name's baseline sits, from an empty inline-block at its end
+      const probe = make("span");
+      probe.style.cssText = "display:inline-block;width:0;height:0";
+      a.append(probe);
+      const baseline = probe.offsetTop;
+      probe.remove();
+
+      const pad = Math.round(fs * 1.1);
+      const w = Math.ceil(a.offsetWidth + fs * 1.9 + pad * 2);
+      const h = Math.ceil(a.offsetHeight + pad * 2);
+      const left = a.offsetLeft - pad, top = a.offsetTop - pad;
+      const base = baseline - top;
+      const dpr = window.devicePixelRatio || 1;
+      const cv = k.put(a.parentElement, make("canvas", "fx-dust"));
+      cv.width = Math.round(w * dpr);
+      cv.height = Math.round(h * dpr);
+      Object.assign(cv.style, { width: `${w}px`, height: `${h}px`, left: `${left}px`, top: `${top}px` });
       k.cls(k.stack, "fx-gone");
-      const bits = ["AppData", "HKCU", ".lnk"].map((t) => box.appendChild(make("span", "fx-bit", t)));
-      bits.forEach((b, i) => k.later(500 + i * 260, () => b.classList.add("is-gone")));
-      k.later(500 + bits.length * 260 + 300, () => {
-        box.textContent = "";
-        box.classList.add("is-done");
-        box.append(make("span", "fx-ok", "0 left"));
-      });
+      const nameColor = cs.color; // read before hiding: cs is live
+      k.cls(a, "fx-hide"); // the canvas draws the name from here on
+
+      const setup = (g) => {
+        g.font = font;
+        if (cs.letterSpacing !== "normal") g.letterSpacing = cs.letterSpacing;
+      };
+      const g = cv.getContext("2d");
+      g.scale(dpr, dpr);
+      setup(g);
+
+      // [dx, dy] in em, and how strong each leftover copy is
+      const ghosts = [[0.55, -0.1, 0.55], [1.1, 0.08, 0.34], [1.65, -0.04, 0.18]];
+
+      // Sample the name and its copies, once, into specks of dust
+      const off = document.createElement("canvas");
+      off.width = w;
+      off.height = h;
+      const o = off.getContext("2d", { willReadFrequently: true });
+      setup(o);
+      o.fillStyle = "#fff";
+      o.fillText(text, pad, base);
+      ghosts.forEach(([dx, dy, al]) => { o.globalAlpha = al; o.fillText(text, pad + dx * fs, base + dy * fs); });
+      const px = o.getImageData(0, 0, w, h).data;
+      const dust = [];
+      for (let x = 0; x < w; x++) {
+        for (let y = 0; y < h; y++) {
+          const al = px[(y * w + x) * 4 + 3];
+          if (al > 30 && Math.random() < 0.45) {
+            const lift = 0.5 + Math.random();
+            dust.push({ x, y, a: Math.min(1, al / 255 * 1.6), vx: (10 + Math.random() * 46) * lift,
+              vy: -(8 + Math.random() * 40) * lift, wob: Math.random() * 6.28, born: -1 });
+          }
+        }
+      }
+
+      const EMERGE = 380, SCAN = 560, SWEEP = 760, LIFE = 820;
+      const ease = (p) => 1 - (1 - p) ** 3;
+      const inOut = (p) => (p < 0.5 ? 4 * p ** 3 : 1 - (-2 * p + 2) ** 3 / 2);
+      const x0 = pad * 0.6, x1 = w - pad * 0.4;
+      const lineTop = base - fs * 0.92, lineH = fs * 1.18;
+      let next = 0; // dust is in x order, so the scan releases it from the front
+      const t0 = performance.now();
+      let frame = 0;
+
+      const draw = () => {
+        const t = performance.now() - t0;
+        g.clearRect(0, 0, w, h);
+        const scanning = t >= SCAN && t < SCAN + SWEEP;
+        const sx = t < SCAN ? -1 : x0 + inOut(Math.min(1, (t - SCAN) / SWEEP)) * (x1 - x0);
+
+        // The name and its copies, still standing to the right of the scan
+        if (t < SCAN + SWEEP) {
+          const p = ease(Math.min(1, t / EMERGE));
+          g.save();
+          if (sx >= 0) { g.beginPath(); g.rect(sx, 0, w - sx, h); g.clip(); }
+          g.fillStyle = ink;
+          ghosts.forEach(([dx, dy, al]) => {
+            g.globalAlpha = al * p;
+            g.fillText(text, pad + dx * fs * p, base + dy * fs * p);
+          });
+          g.globalAlpha = 1;
+          g.fillStyle = nameColor;
+          g.fillText(text, pad, base);
+          g.restore();
+        }
+
+        while (next < dust.length && dust[next].x < sx) dust[next++].born = t;
+
+        // Dust: blue as it breaks off, fading to grey as it drifts away
+        let alive = next < dust.length;
+        for (const pass of [accent, ink]) {
+          g.fillStyle = pass;
+          for (let i = 0; i < next; i++) {
+            const d = dust[i];
+            const age = t - d.born;
+            if (age > LIFE) continue;
+            alive = true;
+            const q = age / LIFE;
+            if ((q < 0.3) !== (pass === accent)) continue;
+            const s = age / 1000;
+            g.globalAlpha = d.a * (1 - q) ** 1.5;
+            g.fillRect(d.x + d.vx * s + Math.sin(d.wob + s * 9) * 1.5, d.y + d.vy * s, 1.5, 1.5);
+          }
+        }
+
+        // The scan line, with a soft wake behind it
+        if (scanning) {
+          g.fillStyle = accent;
+          for (let i = 1; i <= 16; i++) {
+            g.globalAlpha = 0.16 * (1 - i / 16);
+            g.fillRect(sx - i, lineTop, 1, lineH);
+          }
+          g.globalAlpha = 1;
+          g.fillRect(sx, lineTop - 2, 1, lineH + 4);
+        }
+
+        if (alive || t < SCAN + SWEEP) {
+          frame = requestAnimationFrame(draw);
+        } else {
+          g.clearRect(0, 0, w, h);
+          k.later(260, () => {
+            a.classList.remove("fx-hide");
+            k.stack.classList.remove("fx-gone");
+            k.anim(a, [{ opacity: 0, filter: "blur(4px)" }, { opacity: 1, filter: "blur(0)" }],
+              { duration: 520, easing: "cubic-bezier(0.2, 0.7, 0.2, 1)" });
+            k.anim(k.stack, [{ opacity: 0 }, { opacity: 0 }, { opacity: 1 }], { duration: 520 });
+          });
+        }
+      };
+      frame = requestAnimationFrame(draw);
+      k.undo(() => cancelAnimationFrame(frame));
     },
 
-    // Ctrl+Enter: the label becomes a request in flight, then its response
+    // A request's timing waterfall, as an API client draws one: lookup,
+    // connect, TLS, waiting on the server, then the body. The name shimmers
+    // while it waits, and the status lands when the body is in.
     kest: (k) => {
-      const req = k.put(k.a.parentElement, make("span", "fx-req"));
-      req.style.left = `${k.stack.offsetLeft}px`;
+      const net = k.put(k.a.parentElement, make("span", "fx-net"));
+      net.style.left = `${k.stack.offsetLeft}px`;
       k.cls(k.stack, "fx-gone");
-      req.append(make("span", "fx-verb", "GET"), make("span", "fx-wire"));
-      const ms = 18 + Math.round(Math.random() * 40);
-      k.later(560, () => {
-        req.textContent = "";
-        req.classList.add("is-done");
-        req.append(make("span", "fx-ok", "200 OK"), ` ${ms} ms`);
+      const fall = make("span", "fx-fall");
+      const status = make("span", "fx-status", "···");
+      const clock = make("span", "fx-ms", "0 ms");
+      net.append(fall, status, clock);
+
+      const jitter = (v) => v * (0.7 + Math.random() * 0.6);
+      const phases = [["dns", 4], ["tcp", 6], ["tls", 9], ["wait", 16], ["body", 5]]
+        .map(([name, ms]) => [name, jitter(ms)]);
+      const total = sum(phases.map((p) => p[1]));
+      const T = 1300;
+      let at = 0;
+      phases.forEach(([name, ms], i) => {
+        const bar = make("span", `fx-bar is-${name}`);
+        Object.assign(bar.style, {
+          left: `${at / total * 100}%`,
+          width: `${ms / total * 100}%`,
+          top: `calc((100% - 2px) * ${i / (phases.length - 1)})`,
+        });
+        fall.append(bar);
+        const delay = at / total * T, duration = ms / total * T;
+        k.anim(bar, [{ transform: "scaleX(0)" }, { transform: "scaleX(1)" }],
+          { delay, duration, easing: "linear", fill: "backwards" });
+        if (name === "wait") {
+          k.later(delay, () => {
+            k.a.style.animationDuration = `${duration}ms`;
+            k.cls(k.a, "fx-wait");
+          });
+          k.later(delay + duration, () => k.a.classList.remove("fx-wait"));
+          k.undo(() => { k.a.style.animationDuration = ""; });
+        }
+        at += ms;
       });
+
+      const t0 = performance.now();
+      let frame = 0;
+      const tick = () => {
+        const p = Math.min(1, (performance.now() - t0) / T);
+        const text = `${Math.round(p * total)} ms`;
+        if (clock.textContent !== text) clock.textContent = text;
+        if (p < 1) {
+          frame = requestAnimationFrame(tick);
+        } else {
+          status.textContent = "200";
+          status.classList.add("is-in");
+          clock.classList.add("is-in");
+        }
+      };
+      frame = requestAnimationFrame(tick);
+      k.undo(() => cancelAnimationFrame(frame));
     },
   };
 
