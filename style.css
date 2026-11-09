@@ -867,8 +867,10 @@ ul, ol { list-style: none; }
 .fx-cpu path:first-child { fill: color-mix(in srgb, var(--accent) 14%, transparent); }
 .fx-cpu path:last-child { fill: none; stroke: var(--accent); stroke-width: 1; vector-effect: non-scaling-stroke; }
 
-/* Kest: a request goes out where the label was, and its status comes back */
-.fx-req {
+/* Kest: a request goes out where the label was, and its status comes back.
+   Traceless: the leftovers it found, swept away one by one. */
+.fx-req,
+.fx-trace {
   position: absolute;
   top: 50%;
   translate: 0 -50%;
@@ -898,7 +900,14 @@ ul, ol { list-style: none; }
   animation: wire 0.55s cubic-bezier(0.5, 0, 0.5, 1) infinite;
 }
 @keyframes wire { from { translate: -100% 0; } to { translate: 250% 0; } }
-.fx-req.is-done { display: block; animation: fade-in 0.2s; }
+.fx-req.is-done,
+.fx-trace.is-done { display: block; animation: fade-in 0.2s; }
+.fx-bit { animation: fade-in 0.2s backwards; }
+.fx-bit.is-gone {
+  text-decoration: line-through var(--accent);
+  animation: swept 0.3s 0.12s ease-in forwards;
+}
+@keyframes swept { to { opacity: 0; translate: 0 -0.5em; } }
 .fx-ok { color: var(--accent); }
 
 /* Focus states: one project, or one day */

@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&display=swap">
-  <link rel="stylesheet" href="style.css?v=sky-12">
+  <link rel="stylesheet" href="style.css?v=sky-13">
   <script>try { var t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
 </head>
 <body>
@@ -80,7 +80,7 @@
           <p class="total">2026</p>
         </div>
         <p class="note" id="note">
-          Eleven projects since July. Point at one to see what it does and when I built it.
+          Twelve projects since July. Point at one to see what it does and when I built it.
         </p>
         <div class="timeline">
           <div class="wave" id="wave" tabindex="0" role="img"
@@ -151,6 +151,12 @@
           <p class="desc">A process monitor for Windows, in native Go.</p>
           <div class="track" aria-hidden="true"></div>
         </li>
+        <li class="work grid" data-project="traceless"
+            data-detail="Runs an app's own uninstaller, then finds the folders, shortcuts and registry keys it left behind. Files go to the Recycle Bin and registry keys are backed up first. Native Go on the MyGo UI.">
+          <p class="title"><a href="https://github.com/Prit36/traceless">Traceless</a> <span class="stack mono">Go</span></p>
+          <p class="desc">Uninstalls Windows apps and everything they leave behind.</p>
+          <div class="track" aria-hidden="true"></div>
+        </li>
         <li class="work grid" data-project="kest"
             data-detail="A native HTTP client for Windows in Zig that draws its own UI on the GPU. Collections are plain files on disk, Postman and cURL import straight in, and it all ships as one 3.4 MB exe.">
           <p class="title"><a href="https://github.com/Prit36/kest">Kest</a> <span class="stack mono">Zig</span></p>
@@ -197,6 +203,6 @@
   </main>
 
   <script src="data.js"></script>
-  <script src="main.js?v=sky-8"></script>
+  <script src="main.js?v=sky-9"></script>
 </body>
 </html>

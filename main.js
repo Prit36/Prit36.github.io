@@ -1292,6 +1292,20 @@
       k.undo(() => clearInterval(t));
     },
 
+    // The leftovers an uninstaller missed, found and swept away one by one
+    traceless: (k) => {
+      const box = k.put(k.a.parentElement, make("span", "fx-trace"));
+      box.style.left = `${k.stack.offsetLeft}px`;
+      k.cls(k.stack, "fx-gone");
+      const bits = ["AppData", "HKCU", ".lnk"].map((t) => box.appendChild(make("span", "fx-bit", t)));
+      bits.forEach((b, i) => k.later(500 + i * 260, () => b.classList.add("is-gone")));
+      k.later(500 + bits.length * 260 + 300, () => {
+        box.textContent = "";
+        box.classList.add("is-done");
+        box.append(make("span", "fx-ok", "0 left"));
+      });
+    },
+
     // Ctrl+Enter: the label becomes a request in flight, then its response
     kest: (k) => {
       const req = k.put(k.a.parentElement, make("span", "fx-req"));

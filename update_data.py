@@ -35,6 +35,7 @@ PROJECTS = {
     "whistle": (["repos/Prit36/whistle-desktop/commits"], False),
     "quarry": (["repos/Prit36/quarry-disk-analyzer/commits"], False),
     "argus": (["repos/Prit36/argus/commits"], False),
+    "traceless": (["repos/Prit36/traceless/commits"], False),
     "kest": (["repos/Prit36/kest/commits"], False),
 }
 
