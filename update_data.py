@@ -23,7 +23,6 @@ TZ = dt.timezone(dt.timedelta(hours=5, minutes=30))  # IST
 # mine_only filters by GitHub login. Your own repos skip it, because some of
 # their commits were made under a git name that is not linked to the account.
 PROJECTS = {
-    "fuelmate": (["repos/Prit36/fuelmate/commits"], False),
     "pm2": (["repos/VishalJTalaviya/pm2-log-analyzer/commits",
              "repos/Prit36/pm2-log-analyzer/commits"], True),
     "pdf-compressor": (["repos/Prit36/pdf-compressor-wasm/commits"], False),
@@ -36,6 +35,7 @@ PROJECTS = {
     "whistle": (["repos/Prit36/whistle-desktop/commits"], False),
     "quarry": (["repos/Prit36/quarry-disk-analyzer/commits"], False),
     "argus": (["repos/Prit36/argus/commits"], False),
+    "kest": (["repos/Prit36/kest/commits"], False),
 }
 
 

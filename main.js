@@ -1079,9 +1079,6 @@
   };
 
   const tricks = {
-    // A tank filling up
-    fuelmate: (k) => k.cls(k.a, "fx-fuel"),
-
     // Every letter is a request. They lift by response time, sort themselves
     // into a percentile curve with the slow tail in blue, then settle back.
     pm2: (k) => {
@@ -1293,6 +1290,20 @@
       tick();
       const t = setInterval(tick, 70);
       k.undo(() => clearInterval(t));
+    },
+
+    // Ctrl+Enter: the label becomes a request in flight, then its response
+    kest: (k) => {
+      const req = k.put(k.a.parentElement, make("span", "fx-req"));
+      req.style.left = `${k.stack.offsetLeft}px`;
+      k.cls(k.stack, "fx-gone");
+      req.append(make("span", "fx-verb", "GET"), make("span", "fx-wire"));
+      const ms = 18 + Math.round(Math.random() * 40);
+      k.later(560, () => {
+        req.textContent = "";
+        req.classList.add("is-done");
+        req.append(make("span", "fx-ok", "200 OK"), ` ${ms} ms`);
+      });
     },
   };
 

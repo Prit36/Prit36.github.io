@@ -15,7 +15,7 @@
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
   <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=IBM+Plex+Mono:wght@400;500&family=Newsreader:ital,opsz,wght@0,6..72,400..700;1,6..72,400..700&display=swap">
-  <link rel="stylesheet" href="style.css?v=sky-11">
+  <link rel="stylesheet" href="style.css?v=sky-12">
   <script>try { var t = localStorage.getItem("theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}</script>
 </head>
 <body>
@@ -84,19 +84,13 @@
         </p>
         <div class="timeline">
           <div class="wave" id="wave" tabindex="0" role="img"
-               aria-label="Work per day, July to October 2026. Use the arrow keys to step through days."></div>
+               aria-label="Work per day, July to November 2026. Use the arrow keys to step through days."></div>
           <div class="axis mono" id="axis" aria-hidden="true"></div>
         </div>
       </div>
 
       <div class="lists">
       <ol class="works">
-        <li class="work grid" data-project="fuelmate"
-            data-detail="A Kotlin app for logging fuel fill-ups and keeping track of each vehicle's mileage.">
-          <p class="title"><a href="https://github.com/Prit36/fuelmate">FuelMate</a> <span class="stack mono">Kotlin</span></p>
-          <p class="desc">Android app for logging fuel fill-ups and mileage.</p>
-          <div class="track" aria-hidden="true"></div>
-        </li>
         <li class="work grid" data-project="pm2"
             data-detail="Drop in raw logs or whole archives and get latency percentiles, slow endpoints and Excel reports. Runs in the browser or as a desktop app.">
           <p class="title"><a href="https://github.com/Prit36/pm2-log-analyzer">PM2 Log Analyzer</a> <span class="stack mono">TS, Rust</span></p>
@@ -157,6 +151,12 @@
           <p class="desc">A process monitor for Windows, in native Go.</p>
           <div class="track" aria-hidden="true"></div>
         </li>
+        <li class="work grid" data-project="kest"
+            data-detail="A native HTTP client for Windows in Zig that draws its own UI on the GPU. Collections are plain files on disk, Postman and cURL import straight in, and it all ships as one 3.4 MB exe.">
+          <p class="title"><a href="https://github.com/Prit36/kest">Kest</a> <span class="stack mono">Zig</span></p>
+          <p class="desc">An API client that starts instantly. No browser, no sign-in.</p>
+          <div class="track" aria-hidden="true"></div>
+        </li>
       </ol>
 
       <!-- Shown while "Experience" is hovered or selected. From LinkedIn. -->
@@ -197,6 +197,6 @@
   </main>
 
   <script src="data.js"></script>
-  <script src="main.js?v=sky-7"></script>
+  <script src="main.js?v=sky-8"></script>
 </body>
 </html>
